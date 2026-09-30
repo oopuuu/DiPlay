@@ -62,6 +62,14 @@ class AndroidMediaSink(
 
     override fun setVideoRecoveryHandler(type: Int, handler: () -> Unit) {
         videoRecoveryHandlers[type] = handler
+        if (type == 110 || CarPlayVideoBridge.keyFrameRequester == null) {
+            CarPlayVideoBridge.keyFrameRequester = {
+                recoveryExecutor.execute {
+                    try { (videoRecoveryHandlers[110] ?: handler).invoke() }
+                    catch (error: Exception) { Log.w("xcertplay-usb", "Video keyframe request failed", error) }
+                }
+            }
+        }
     }
 
     override fun setVideoDiagnosticHandler(type: Int, handler: (String) -> Unit) {
@@ -101,11 +109,18 @@ class AndroidMediaSink(
 
     override fun onVideoConfig(type: Int, codecData: ByteArray) {
         val codec = pendingVideoCodec[type] ?: VideoCodec.H264
+        CarPlayVideoBridge.onConfig(type, codec, codecData)
         videoDecoder(type).configure(codec, codecData)
     }
 
     override fun onVideoFrame(type: Int, naluBytes: ByteArray) {
-        videoDecoder(type).submit(naluBytes)
+        val codec = pendingVideoCodec[type] ?: VideoCodec.H264
+        val annexB = MediaCodecSupport.toAnnexB(naluBytes)
+        val isKey = MediaCodecSupport.isRandomAccess(annexB, codec)
+        CarPlayVideoBridge.onFrame(type, isKey, naluBytes)
+        if (!CarPlayVideoBridge.isPhoneRenderingSuspended) {
+            videoDecoder(type).submit(naluBytes)
+        }
     }
 
     override fun onScreenStreamActive(type: Int, active: Boolean) {
@@ -255,13 +270,13 @@ private class VideoDecoder(
                     }
                     decoder?.let(::drainOutput)
                     stats.logIfDue()?.let(report)
-                    if (referenceChain.needsKeyFrame && lastConfig != null && outputSurface != null) requestKeyFrameIfDue()
+                    if (referenceChain.needsKeyFrame && lastConfig != null && outputSurface != null && !CarPlayVideoBridge.isPhoneRenderingSuspended) requestKeyFrameIfDue()
                 } catch (error: Exception) {
                     if (running) Log.e(TAG, "video decoder job failed: ${job?.javaClass?.simpleName}", error)
                     if (running) report("decoder error ${error.javaClass.simpleName}; waiting for keyframe")
                     releaseDecoder()
                     referenceChain.reset()
-                    requestKeyFrameIfDue()
+                    if (!CarPlayVideoBridge.isPhoneRenderingSuspended) requestKeyFrameIfDue()
                 }
             }
         } catch (_: InterruptedException) {
@@ -916,6 +931,14 @@ private class AudioRenderer(
     }
 
     private fun writePcm(data: ByteArray, offset: Int = 0, length: Int = data.size) {
+        val interceptor = CarPlayAudioBridge.audioOutputInterceptor
+        if (interceptor != null && interceptor.invoke(data, offset, length, format.sampleRate, format.channels)) {
+            if (playbackStarted) {
+                track?.pause()
+                playbackStarted = false
+            }
+            return
+        }
         val track = track ?: return
         if (!firstPcmLogged && length > 0) {
             firstPcmLogged = true

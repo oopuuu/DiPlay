@@ -49,6 +49,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.shilapi.xcertplay.airplay.CarPlayMediaButton
+import com.shilapi.xcertplay.web.CarPlayWebRemoteManager
 import com.shilapi.xcertplay.airplay.AirPlayConfig
 import com.shilapi.xcertplay.airplay.AirPlayDisplaySettings
 import com.shilapi.xcertplay.airplay.AirPlayPhysicalSizeBasis
@@ -239,6 +240,7 @@ class CarPlayHostActivity : ComponentActivity() {
         }
 
     private var videoView: TextureView? = null
+    private var webActiveOverlay: View? = null
     private var gestureOverlay: View? = null
     private var settingsMenu: View? = null
     private var mfiTargetGroup: RadioGroup? = null
@@ -369,7 +371,12 @@ class CarPlayHostActivity : ComponentActivity() {
         }
 
         override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
-            scheduleDisplaySize(width, height)
+            val pref = CarPlayWebRemoteManager.currentPreferredResolution
+            if (pref != null) {
+                scheduleDisplaySize(pref.first, pref.second)
+            } else {
+                scheduleDisplaySize(width, height)
+            }
         }
 
         override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
@@ -385,11 +392,72 @@ class CarPlayHostActivity : ComponentActivity() {
             return true
         }
 
-        override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
+        override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {
+            CarPlayWebRemoteManager.onTextureFrameUpdated()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CarPlayWebRemoteManager.init(this)
+        if (AirPlayPersistence.loadWebRemoteEnabled(this)) {
+            CarPlayWebRemoteManager.startServer(this)
+        }
+        CarPlayWebRemoteManager.onResolutionRequested = { width, height ->
+            runOnUiThread {
+                if (!shuttingDown.get() && width > 0 && height > 0) {
+                    appendLog("Web Remote requested resolution: ${width}x${height}")
+                    adjustVideoViewAspectRatio(width, height)
+                    scheduleDisplaySize(width, height)
+                }
+            }
+        }
+        CarPlayWebRemoteManager.onWebClientConnected = {
+            runOnUiThread {
+                if (!shuttingDown.get()) {
+                    appendLog("Web Remote connected: suspending local phone display rendering for performance & power saving")
+                    com.shilapi.xcertplay.media.CarPlayVideoBridge.isPhoneRenderingSuspended = true
+                    webActiveOverlay?.visibility = View.VISIBLE
+                    webActiveOverlay?.bringToFront()
+                }
+            }
+        }
+        CarPlayWebRemoteManager.onAllWebClientsDisconnected = {
+            runOnUiThread {
+                if (!shuttingDown.get()) {
+                    appendLog("Web Remote closed: restoring screen size and layout to phone display")
+                    com.shilapi.xcertplay.media.CarPlayVideoBridge.isPhoneRenderingSuspended = false
+                    webActiveOverlay?.visibility = View.GONE
+                    com.shilapi.xcertplay.media.CarPlayVideoBridge.requestKeyFrame()
+                    CarPlayWebRemoteManager.currentPreferredResolution = null
+                    val parent = videoView?.parent as? ViewGroup
+                    val parentWidth = parent?.width ?: resources.displayMetrics.widthPixels
+                    val parentHeight = parent?.height ?: resources.displayMetrics.heightPixels
+
+                    videoView?.let { video ->
+                        video.layoutParams = FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                        )
+                        video.scaleX = 1.0f
+                        video.scaleY = 1.0f
+                        video.pivotX = parentWidth / 2f
+                        video.pivotY = parentHeight / 2f
+                    }
+                    gestureOverlay?.let { overlay ->
+                        overlay.layoutParams = FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                        )
+                        overlay.scaleX = 1.0f
+                        overlay.scaleY = 1.0f
+                        overlay.pivotX = parentWidth / 2f
+                        overlay.pivotY = parentHeight / 2f
+                    }
+                    scheduleDisplaySize(parentWidth, parentHeight)
+                }
+            }
+        }
         languagePreferenceAtCreate = AppLocale.preference(this)
         if (intent.action == "android.hardware.usb.action.USB_DEVICE_ATTACHED") {
             AirPlayPersistence.saveWirelessEnabled(this, false)
@@ -569,6 +637,13 @@ class CarPlayHostActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        val isWebStreaming = com.shilapi.xcertplay.media.CarPlayVideoBridge.isPhoneRenderingSuspended ||
+            (CarPlayWebRemoteManager.getClientCount() > 0)
+        if (isWebStreaming) {
+            com.shilapi.xcertplay.media.CarPlayVideoBridge.isPhoneRenderingSuspended = true
+            webActiveOverlay?.visibility = View.VISIBLE
+            webActiveOverlay?.bringToFront()
+        }
         val languagePreference = AppLocale.preference(this)
         if (Build.VERSION.SDK_INT < 33 && languagePreference != languagePreferenceAtCreate) {
             languagePreferenceAtCreate = languagePreference
@@ -756,8 +831,14 @@ class CarPlayHostActivity : ComponentActivity() {
         stageStatusView?.maxWidth = (resources.displayMetrics.widthPixels * 0.78f).toInt()
         scrollLogsToBottom()
         videoView?.post {
-            val view = videoView ?: return@post
-            scheduleDisplaySize(view.width, view.height)
+            val pref = CarPlayWebRemoteManager.currentPreferredResolution
+            if (pref != null) {
+                adjustVideoViewAspectRatio(pref.first, pref.second)
+                scheduleDisplaySize(pref.first, pref.second)
+            } else {
+                val view = videoView ?: return@post
+                scheduleDisplaySize(view.width, view.height)
+            }
         }
     }
 
@@ -776,7 +857,49 @@ class CarPlayHostActivity : ComponentActivity() {
         sessionLog?.append("Activity destroyed")
         sessionLog?.close()
         sessionLog = null
+        CarPlayWebRemoteManager.onResolutionRequested = null
+        CarPlayWebRemoteManager.onWebClientConnected = null
+        CarPlayWebRemoteManager.onAllWebClientsDisconnected = null
+        CarPlayWebRemoteManager.attach(null, null)
         super.onDestroy()
+    }
+
+    private fun adjustVideoViewAspectRatio(targetWidth: Int, targetHeight: Int) {
+        val video = videoView ?: return
+        val parent = video.parent as? ViewGroup ?: return
+        val parentWidth = parent.width
+        val parentHeight = parent.height
+        if (parentWidth <= 0 || parentHeight <= 0) {
+            parent.post { adjustVideoViewAspectRatio(targetWidth, targetHeight) }
+            return
+        }
+
+        val lp = FrameLayout.LayoutParams(targetWidth, targetHeight).apply {
+            gravity = Gravity.CENTER
+        }
+        video.layoutParams = lp
+
+        // Scale to fit neatly within parent container without distorting or clipping
+        val scale = minOf(
+            parentWidth.toFloat() / targetWidth.toFloat(),
+            parentHeight.toFloat() / targetHeight.toFloat()
+        ).coerceAtMost(1.0f)
+
+        video.pivotX = targetWidth / 2f
+        video.pivotY = targetHeight / 2f
+        video.scaleX = scale
+        video.scaleY = scale
+
+        gestureOverlay?.let { overlay ->
+            val overlayLp = FrameLayout.LayoutParams(targetWidth, targetHeight).apply {
+                gravity = Gravity.CENTER
+            }
+            overlay.layoutParams = overlayLp
+            overlay.pivotX = targetWidth / 2f
+            overlay.pivotY = targetHeight / 2f
+            overlay.scaleX = scale
+            overlay.scaleY = scale
+        }
     }
 
     private fun buildContentView(): View {
@@ -833,8 +956,48 @@ class CarPlayHostActivity : ComponentActivity() {
             text = getString(R.string.in_carplay_swipe_down_with_three_fingers_to_open_diplay_se)
             textSize = 13f; gravity = Gravity.CENTER; setTextColor(Color.rgb(168, 182, 202)); setPadding(0, dp(20), 0, 0)
         })
+        val isWebActive = com.shilapi.xcertplay.media.CarPlayVideoBridge.isPhoneRenderingSuspended ||
+            (CarPlayWebRemoteManager.getClientCount() > 0)
+        val webOverlay = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.rgb(10, 14, 23))
+            visibility = if (isWebActive) View.VISIBLE else View.GONE
+            val icon = TextView(this@CarPlayHostActivity).apply {
+                text = "🌐"
+                textSize = 44f
+                gravity = Gravity.CENTER
+            }
+            val title = TextView(this@CarPlayHostActivity).apply {
+                text = "网页端投屏运行中"
+                textSize = 20f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                setPadding(0, dp(12), 0, dp(6))
+            }
+            val subtitle = TextView(this@CarPlayHostActivity).apply {
+                text = "本机画面已休眠以节省电量与性能\n关闭网页后将自动恢复本机显示"
+                textSize = 14f
+                setTextColor(Color.rgb(148, 163, 184))
+                gravity = Gravity.CENTER
+                setLineSpacing(dp(4).toFloat(), 1f)
+            }
+            addView(icon)
+            addView(title)
+            addView(subtitle)
+        }
+        root.addView(webOverlay, FrameLayout.LayoutParams(-1, -1))
+        webActiveOverlay = webOverlay
+
+        if (isWebActive) {
+            webActiveOverlay?.visibility = View.VISIBLE
+            webActiveOverlay?.bringToFront()
+            com.shilapi.xcertplay.media.CarPlayVideoBridge.isPhoneRenderingSuspended = true
+        }
+
         root.addView(panel, FrameLayout.LayoutParams(-1, -1))
         videoView = video
+        CarPlayWebRemoteManager.attach(controller, video)
         gestureOverlay = gestureLayer
         stageStatusView = stage
         connectionPanel = panel
@@ -3061,6 +3224,7 @@ class CarPlayHostActivity : ComponentActivity() {
         displayDiagnosticAttempt = DisplayDiagnosticSnapshot.currentAttempt(this)
         controller = snapshot.controller
         sink = snapshot.sink
+        CarPlayWebRemoteManager.attach(controller, videoView)
         CarPlayBackgroundSession.store(snapshot.controller, snapshot.sink, snapshot.width, snapshot.height, this) { completion ->
             runOnUiThread {
                 shutdown(false, "DiPlay disconnect", completion)
@@ -3165,6 +3329,7 @@ class CarPlayHostActivity : ComponentActivity() {
             },
         )
         controller = next
+        CarPlayWebRemoteManager.attach(controller, videoView)
         CarPlayMediaKeys.attach(this, next)
         CarPlayBackgroundSession.store(next, renderer, size.width, size.height, this) { completion ->
             runOnUiThread {
@@ -3312,6 +3477,7 @@ class CarPlayHostActivity : ComponentActivity() {
         CarPlayMediaKeys.detach(oldController)
         CarPlayBackgroundSession.clear(oldController, keepOwner = true)
         controller = null
+        CarPlayWebRemoteManager.attach(null, videoView)
         sink = null
         teardownExecutor.execute {
             oldController?.close()
@@ -3386,6 +3552,7 @@ class CarPlayHostActivity : ComponentActivity() {
         CarPlayMediaKeys.detach(oldController)
         CarPlayBackgroundSession.clear(oldController)
         controller = null
+        CarPlayWebRemoteManager.attach(null, videoView)
         sink = null
         Log.i(TAG, "shutdown reason=$reason terminateProcess=$terminateProcess")
         teardownExecutor.execute {

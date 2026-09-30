@@ -448,4 +448,11 @@
     <string name="adb_battery_reading">Battery: %1$d %%, %2$d km.</string>
     <string name="adb_battery_unreadable">The battery cannot be read on this car, so the iPhone is not told about an electric car.</string>
     <string name="adb_battery_reconnect">If CarPlay connected before the battery was ready, use Apply and reconnect to enable battery reporting.</string>
+    <string name="web_remote">Browser Screen &amp; Remote Control</string>
+    <string name="web_remote_description">View the CarPlay screen and control touch, Siri and media from any browser on your Wi-Fi or hotspot network.</string>
+    <string name="web_remote_enable">Enable browser remote control</string>
+    <string name="web_remote_access_url">Access URL:</string>
+    <string name="web_remote_port_label">Port: %1$d</string>
+    <string name="web_remote_open_in_browser">Open Web Remote in browser</string>
+    <string name="web_remote_clients_connected">%1$d client(s) connected</string>
 </resources>

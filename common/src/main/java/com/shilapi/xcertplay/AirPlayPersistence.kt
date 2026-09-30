@@ -72,6 +72,8 @@ object AirPlayPersistence {
     private const val KEY_MFI_I2C_PATH = "mfi_i2c_path"
     private const val KEY_REMOTE_MFI_SERVER = "remote_mfi_server"
     private const val KEY_REMOTE_MFI_TOKEN = "remote_mfi_token"
+    private const val KEY_WEB_REMOTE_ENABLED = "web_remote_enabled"
+    private const val KEY_WEB_REMOTE_PORT = "web_remote_port"
     private const val SAFE_AREA_KEY_PREFIX = "safe_area_"
     private const val CUSTOM_ICON_FILE = "airplay-icon.png"
 
@@ -79,6 +81,30 @@ object AirPlayPersistence {
     const val DEFAULT_MODEL = "DiPlay"
     const val DEFAULT_OEM_LABEL = "BYD"
     const val DEFAULT_MFI_I2C_PATH = "/dev/i2c-1"
+    const val DEFAULT_WEB_REMOTE_PORT = 8088
+
+    fun loadWebRemoteEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_WEB_REMOTE_ENABLED, true)
+
+    fun saveWebRemoteEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_WEB_REMOTE_ENABLED, enabled)
+            .apply()
+    }
+
+    fun loadWebRemotePort(context: Context): Int {
+        val port = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getInt(KEY_WEB_REMOTE_PORT, DEFAULT_WEB_REMOTE_PORT)
+        return if (port in 1024..65535) port else DEFAULT_WEB_REMOTE_PORT
+    }
+
+    fun saveWebRemotePort(context: Context, port: Int) {
+        val validPort = if (port in 1024..65535) port else DEFAULT_WEB_REMOTE_PORT
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putInt(KEY_WEB_REMOTE_PORT, validPort)
+            .apply()
+    }
 
     fun loadDisplayScaleTenths(context: Context): Int {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

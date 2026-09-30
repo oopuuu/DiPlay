@@ -21,6 +21,7 @@ captures/
 .DS_Store
 Thumbs.db
 *.log
+scratch/
 /.idea
 
 # Local beta credentials and release signing (never commit)

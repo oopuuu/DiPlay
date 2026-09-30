@@ -134,7 +134,22 @@ internal class MicrophoneUplink(private val config: MicrophoneConfig) : Closeabl
         var filled = 0
         try {
             while (running.get()) {
-                val count = recorder.read(readBuffer, 0, readBuffer.size, AudioRecord.READ_BLOCKING)
+                val micProvider = CarPlayAudioBridge.micInputProvider
+                val count = if (micProvider != null) {
+                    val fromWeb = micProvider.invoke(readBuffer, 0, readBuffer.size)
+                    if (fromWeb > 0) {
+                        fromWeb
+                    } else {
+                        recorder.read(readBuffer, 0, readBuffer.size, AudioRecord.READ_NON_BLOCKING)
+                            .coerceAtLeast(0)
+                            .takeIf { it > 0 } ?: run {
+                                Thread.sleep(10)
+                                0
+                            }
+                    }
+                } else {
+                    recorder.read(readBuffer, 0, readBuffer.size, AudioRecord.READ_BLOCKING)
+                }
                 if (count < 0) {
                     if (running.get()) Log.e(TAG, "microphone read failed code=$count")
                     return

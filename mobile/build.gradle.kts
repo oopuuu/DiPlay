@@ -4,8 +4,11 @@ plugins {
 }
 
 // Optional local-only input. CI and ordinary source builds contain no accessory identity.
-val localAuthenticationAssets = providers.environmentVariable("DIPLAY_AUTH_ASSETS_DIR")
-    .orNull?.let { file(it).canonicalFile }
+val localAuthenticationAssets = (
+    providers.environmentVariable("DIPLAY_AUTH_ASSETS_DIR").orNull
+        ?: providers.gradleProperty("diplay.auth.assets.dir").orNull
+        ?: rootProject.file(".private/auth-assets").takeIf { it.isDirectory }?.absolutePath
+)?.let { file(it).canonicalFile }
 
 android {
     namespace = "com.shilapi.xcertplay"

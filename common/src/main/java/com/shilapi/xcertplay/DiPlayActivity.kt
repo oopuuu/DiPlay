@@ -99,6 +99,10 @@ class DiPlayActivity : ComponentActivity() {
         }
         pendingCarHotspotSetup = savedInstanceState?.getBoolean("pending_car_hotspot") ?: false
         page = savedInstanceState?.getString("page") ?: intent.getStringExtra("page") ?: "home"
+        if (AirPlayPersistence.loadWebRemoteEnabled(this)) {
+            com.shilapi.xcertplay.web.CarPlayWebRemoteManager.init(this)
+            com.shilapi.xcertplay.web.CarPlayWebRemoteManager.startServer(this)
+        }
         render()
         handleWirelessRecovery()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -266,6 +270,37 @@ class DiPlayActivity : ComponentActivity() {
             toggle(card, getString(R.string.right_hand_drive), getString(R.string.place_carplay_s_controls_closer_to_the_driver), AirPlayPersistence.loadRightHandDrive(this)) { AirPlayPersistence.saveRightHandDrive(this, it) }
             toggle(card, getString(R.string.full_screen), getString(R.string.hide_the_car_s_system_bars_while_carplay_is_open), AirPlayPersistence.loadHideTopBar(this) && AirPlayPersistence.loadHideBottomBar(this)) {
                 AirPlayPersistence.saveHideTopBar(this, it); AirPlayPersistence.saveHideBottomBar(this, it)
+            }
+        }
+        section(content, getString(R.string.web_remote), R.drawable.ic_dp_display) { card ->
+            val enabled = AirPlayPersistence.loadWebRemoteEnabled(this)
+            val url = com.shilapi.xcertplay.web.CarPlayWebRemoteManager.getPrimaryAccessUrl(this)
+            val clients = com.shilapi.xcertplay.web.CarPlayWebRemoteManager.getClientCount()
+            toggle(card, getString(R.string.web_remote_enable),
+                getString(R.string.web_remote_description),
+                enabled) { checked ->
+                AirPlayPersistence.saveWebRemoteEnabled(this, checked)
+                if (checked) {
+                    com.shilapi.xcertplay.web.CarPlayWebRemoteManager.startServer(this)
+                } else {
+                    com.shilapi.xcertplay.web.CarPlayWebRemoteManager.stopServer()
+                }
+                render()
+            }
+            if (enabled) {
+                card.addView(label("${getString(R.string.web_remote_access_url)} $url", 17, ACCENT, true).apply {
+                    setPadding(0, dp(12), 0, dp(4))
+                })
+                card.addView(label(getString(R.string.web_remote_clients_connected, clients), 14, MUTED).apply {
+                    setPadding(0, 0, 0, dp(12))
+                })
+                card.addView(button(getString(R.string.web_remote_open_in_browser), false) {
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    } catch (e: Exception) {
+                        toast(e.message ?: "Failed to open browser")
+                    }
+                }, matchButton(8, 56))
             }
         }
         section(content, getString(R.string.audio_routing)) { card ->

@@ -386,6 +386,18 @@ class CarPlayController(
         }
     }
 
+    /** Sends a CarPlay Home button press to return to the CarPlay dashboard/home screen. */
+    fun sendHomeButton(): Boolean {
+        if (closed) return false
+        val session = activeSession ?: return false
+        return try {
+            touchExecutor.execute { session.sendKnob(com.shilapi.xcertplay.airplay.AirPlayKnobState(home = true)) }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     override fun close() {
         synchronized(this) {
             if (closed) return
