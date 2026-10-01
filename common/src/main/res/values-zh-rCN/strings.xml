@@ -455,4 +455,20 @@
     <string name="web_remote_port_label">端口：%1$d</string>
     <string name="web_remote_open_in_browser">在车机浏览器中打开测试</string>
     <string name="web_remote_clients_connected">当前已连接 %1$d 个客户端</string>
+    <string name="hotspot_section_title">车载局域网热点 (无 SIM 卡专属)</string>
+    <string name="hotspot_enable">开启无卡局域网热点 (Local-Only AP)</string>
+    <string name="hotspot_description">无需 SIM 卡和移动数据流量！利用 Android 原生局域网 AP 功能，直接与特斯拉车机建立高速低延迟投屏网络。</string>
+    <string name="hotspot_status_active">热点状态：🟢 运行中</string>
+    <string name="hotspot_status_starting">热点状态：🟡 正在启动…</string>
+    <string name="hotspot_status_inactive">热点状态：⚪ 未开启</string>
+    <string name="hotspot_ssid_label">热点名称 (SSID)：</string>
+    <string name="hotspot_password_label">连接密码：</string>
+    <string name="hotspot_tesla_url_label">特斯拉车机直连网址：</string>
+    <string name="hotspot_copy_credentials">一键复制热点与车机网址</string>
+    <string name="hotspot_credentials_copied">热点信息与车机网址已复制到剪贴板！</string>
+    <string name="hotspot_open_system_settings">打开系统网络共享设置</string>
+    <string name="hotspot_permission_hint">开启本地热点需要定位及附近设备权限，请点击授权。</string>
+    <string name="hotspot_grant_permissions">授予所需权限</string>
+    <string name="hotspot_enable_gps_hint">系统位置服务 (GPS) 处于关闭状态，请在系统设置中开启定位。</string>
+    <string name="hotspot_open_location_settings">前往开启系统定位</string>
 </resources>

@@ -455,4 +455,20 @@
     <string name="web_remote_port_label">Port: %1$d</string>
     <string name="web_remote_open_in_browser">Open Web Remote in browser</string>
     <string name="web_remote_clients_connected">%1$d client(s) connected</string>
+    <string name="hotspot_section_title">Vehicle Local Hotspot (SIM-less Mode)</string>
+    <string name="hotspot_enable">Enable Local-Only Hotspot (AP)</string>
+    <string name="hotspot_description">No SIM card or cellular data required! Uses Android native Local-Only AP to create an ultra-low-latency projection network for Tesla.</string>
+    <string name="hotspot_status_active">Hotspot Status: 🟢 Running</string>
+    <string name="hotspot_status_starting">Hotspot Status: 🟡 Starting…</string>
+    <string name="hotspot_status_inactive">Hotspot Status: ⚪ Stopped</string>
+    <string name="hotspot_ssid_label">Wi-Fi SSID: </string>
+    <string name="hotspot_password_label">Password: </string>
+    <string name="hotspot_tesla_url_label">Tesla Browser URL: </string>
+    <string name="hotspot_copy_credentials">Copy Wi-Fi &amp; Browser URL</string>
+    <string name="hotspot_credentials_copied">Hotspot info &amp; browser URL copied to clipboard!</string>
+    <string name="hotspot_open_system_settings">Open System Tethering Settings</string>
+    <string name="hotspot_permission_hint">Location &amp; Nearby Devices permissions required to start local hotspot.</string>
+    <string name="hotspot_grant_permissions">Grant Required Permissions</string>
+    <string name="hotspot_enable_gps_hint">System Location (GPS) is turned off. Please enable it in system settings.</string>
+    <string name="hotspot_open_location_settings">Open Location Settings</string>
 </resources>

@@ -76,6 +76,18 @@ class DiPlayActivity : ComponentActivity() {
     private val export = registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         if (uri != null) exportDiagnostics(uri)
     }
+    private val hotspotPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+        val allGranted = results.values.all { it }
+        if (allGranted) {
+            com.shilapi.xcertplay.web.CarPlayHotspotManager.startHotspot(this)
+        } else {
+            toast(getString(R.string.hotspot_permission_hint))
+        }
+        render()
+    }
+    private val hotspotListener: (com.shilapi.xcertplay.web.CarPlayHotspotManager.HotspotInfo) -> Unit = {
+        runOnUiThread { render() }
+    }
 
     private var languagePreferenceAtCreate = AppLocale.SYSTEM
 
@@ -103,6 +115,7 @@ class DiPlayActivity : ComponentActivity() {
             com.shilapi.xcertplay.web.CarPlayWebRemoteManager.init(this)
             com.shilapi.xcertplay.web.CarPlayWebRemoteManager.startServer(this)
         }
+        com.shilapi.xcertplay.web.CarPlayHotspotManager.addListener(hotspotListener)
         render()
         handleWirelessRecovery()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -111,6 +124,11 @@ class DiPlayActivity : ComponentActivity() {
                 else { isEnabled = false; onBackPressedDispatcher.onBackPressed(); isEnabled = true }
             }
         })
+    }
+
+    override fun onDestroy() {
+        com.shilapi.xcertplay.web.CarPlayHotspotManager.removeListener(hotspotListener)
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -302,6 +320,99 @@ class DiPlayActivity : ComponentActivity() {
                     }
                 }, matchButton(8, 56))
             }
+        }
+        section(content, getString(R.string.hotspot_section_title), R.drawable.ic_dp_connection) { card ->
+            val hotspotInfo = com.shilapi.xcertplay.web.CarPlayHotspotManager.currentInfo
+            val hasPerm = com.shilapi.xcertplay.web.CarPlayHotspotManager.hasRequiredPermissions(this)
+            val isLocOn = com.shilapi.xcertplay.web.CarPlayHotspotManager.isLocationModeEnabled(this)
+
+            toggle(card, getString(R.string.hotspot_enable),
+                getString(R.string.hotspot_description),
+                hotspotInfo.isActive || hotspotInfo.isStarting) { checked ->
+                if (checked) {
+                    if (!hasPerm) {
+                        hotspotPermissions.launch(com.shilapi.xcertplay.web.CarPlayHotspotManager.getRequiredPermissions())
+                    } else if (!isLocOn) {
+                        toast(getString(R.string.hotspot_enable_gps_hint))
+                        try {
+                            startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                        } catch (e: Exception) {
+                            openSystem(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                        }
+                    } else {
+                        com.shilapi.xcertplay.web.CarPlayHotspotManager.startHotspot(this)
+                    }
+                } else {
+                    com.shilapi.xcertplay.web.CarPlayHotspotManager.stopHotspot()
+                }
+                render()
+            }
+
+            val statusText = when {
+                hotspotInfo.isActive -> getString(R.string.hotspot_status_active)
+                hotspotInfo.isStarting -> getString(R.string.hotspot_status_starting)
+                else -> getString(R.string.hotspot_status_inactive)
+            }
+            card.addView(label(statusText, 16, if (hotspotInfo.isActive) ACCENT else MUTED, true).apply {
+                setPadding(0, dp(10), 0, dp(6))
+            })
+
+            if (!hasPerm) {
+                card.addView(label(getString(R.string.hotspot_permission_hint), 14, MUTED).apply {
+                    setPadding(0, dp(4), 0, dp(8))
+                })
+                card.addView(button(getString(R.string.hotspot_grant_permissions), false) {
+                    hotspotPermissions.launch(com.shilapi.xcertplay.web.CarPlayHotspotManager.getRequiredPermissions())
+                }, matchButton(8, 48))
+            } else if (!isLocOn) {
+                card.addView(label(getString(R.string.hotspot_enable_gps_hint), 14, MUTED).apply {
+                    setPadding(0, dp(4), 0, dp(8))
+                })
+                card.addView(button(getString(R.string.hotspot_open_location_settings), false) {
+                    try {
+                        startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                    } catch (e: Exception) {
+                        openSystem(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                    }
+                }, matchButton(8, 48))
+            }
+
+            if (hotspotInfo.isActive) {
+                val ssid = hotspotInfo.ssid ?: "DiPlay_Hotspot"
+                val pass = hotspotInfo.password ?: ""
+                val url = hotspotInfo.webUrl ?: com.shilapi.xcertplay.web.CarPlayWebRemoteManager.getPrimaryAccessUrl(this)
+
+                card.addView(label("${getString(R.string.hotspot_ssid_label)}$ssid", 16, TEXT, true).apply {
+                    setPadding(0, dp(6), 0, dp(2))
+                })
+                if (pass.isNotEmpty()) {
+                    card.addView(label("${getString(R.string.hotspot_password_label)}$pass", 16, TEXT, true).apply {
+                        setPadding(0, dp(2), 0, dp(4))
+                    })
+                }
+                card.addView(label("${getString(R.string.hotspot_tesla_url_label)}$url", 17, ACCENT, true).apply {
+                    setPadding(0, dp(4), 0, dp(12))
+                })
+                card.addView(button(getString(R.string.hotspot_copy_credentials), true) {
+                    if (com.shilapi.xcertplay.web.CarPlayHotspotManager.copyCredentials(this)) {
+                        toast(getString(R.string.hotspot_credentials_copied))
+                    }
+                }, matchButton(8, 56))
+            }
+
+            if (hotspotInfo.errorMessage != null) {
+                card.addView(label(hotspotInfo.errorMessage, 14, Color.parseColor("#FF6B6B")).apply {
+                    setPadding(0, dp(8), 0, dp(4))
+                })
+            }
+
+            card.addView(button(getString(R.string.hotspot_open_system_settings), false) {
+                try {
+                    startActivity(com.shilapi.xcertplay.web.CarPlayHotspotManager.createSystemHotspotIntent())
+                } catch (e: Exception) {
+                    openSystem(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+                }
+            }, matchButton(8, 48))
         }
         section(content, getString(R.string.audio_routing)) { card ->
             val channelTitle = label(getString(R.string.navigation_stream_type), 18, TEXT, true)

@@ -342,21 +342,27 @@ object CarPlayWebRemoteManager {
 
     /** Retrieves all available local IPv4 addresses (Wi-Fi, Hotspot, Ethernet, etc.). */
     fun getLocalIpAddresses(): List<String> {
-        val result = mutableListOf<String>()
+        val hotspotIps = mutableListOf<String>()
+        val wlanIps = mutableListOf<String>()
+        val otherIps = mutableListOf<String>()
+
         try {
             val interfaces = NetworkInterface.getNetworkInterfaces() ?: return emptyList()
             for (iface in Collections.list(interfaces)) {
                 if (!iface.isUp || iface.isLoopback) continue
                 val name = iface.name.lowercase()
-                // Prefer Wi-Fi, hotspot, and eth interfaces
+                val isHotspotIface = name.startsWith("ap") || name.startsWith("softap") || name.startsWith("swlan")
+
                 for (addr in Collections.list(iface.inetAddresses)) {
                     if (addr is Inet4Address && !addr.isLoopbackAddress) {
                         val host = addr.hostAddress ?: continue
                         if (!host.startsWith("127.")) {
-                            if (name.startsWith("wlan") || name.startsWith("ap") || name.startsWith("eth")) {
-                                result.add(0, host) // Prioritize standard interfaces
+                            if (isHotspotIface || host.startsWith("192.168.43.") || host.startsWith("192.168.49.") || host.startsWith("192.168.50.")) {
+                                hotspotIps.add(host)
+                            } else if (name.startsWith("wlan") || name.startsWith("eth")) {
+                                wlanIps.add(host)
                             } else {
-                                result.add(host)
+                                otherIps.add(host)
                             }
                         }
                     }
@@ -365,7 +371,12 @@ object CarPlayWebRemoteManager {
         } catch (e: Exception) {
             Log.w(TAG, "Failed to resolve network IP addresses", e)
         }
-        return result.distinct()
+
+        val all = mutableListOf<String>()
+        all.addAll(hotspotIps)
+        all.addAll(wlanIps)
+        all.addAll(otherIps)
+        return all.distinct()
     }
 
     /** Returns primary access URL, e.g. "http://192.168.43.1:8088" */
