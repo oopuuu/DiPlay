@@ -2,7 +2,9 @@
     <string name="built_in_car_hotspot">Built-in car hotspot</string>
     <string name="wifi_direct">Wi-Fi Direct</string>
     <string name="hotspot_hint_manual">Built-in car hotspot · Keep the car hotspot, Bluetooth and your iPhone’s Wi-Fi on.</string>
-    <string name="hotspot_hint_local">Open Connection setup to save your built-in car hotspot details.</string>
+    <string name="hotspot_hint_local">Local-Only Hotspot · Phone creates a single hotspot for both iPhone and Tesla browser.</string>
+    <string name="hotspot_mode_local_title">Local Hotspot (SIM-less, Recommended)</string>
+    <string name="hotspot_mode_local_desc">No SIM card or external Wi-Fi needed! Phone creates a single hotspot for both iPhone and Tesla without conflicts.</string>
     <string name="hotspot_hint_p2p">Wi-Fi Direct · Keep the car’s Wi-Fi switch, Bluetooth and your iPhone’s Wi-Fi on.</string>
     <string name="cluster_size_standard">Standard · sharpest</string>
     <string name="cluster_size_larger">Larger · default</string>

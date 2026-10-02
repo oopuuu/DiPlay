@@ -322,7 +322,7 @@ class DiPlayActivity : ComponentActivity() {
             }
         }
         section(content, getString(R.string.hotspot_section_title), R.drawable.ic_dp_connection) { card ->
-            val hotspotInfo = com.shilapi.xcertplay.web.CarPlayHotspotManager.currentInfo
+            val hotspotInfo = com.shilapi.xcertplay.web.CarPlayWebRemoteManager.activeWirelessHotspotInfo ?: com.shilapi.xcertplay.web.CarPlayHotspotManager.currentInfo
             val hasPerm = com.shilapi.xcertplay.web.CarPlayHotspotManager.hasRequiredPermissions(this)
             val isLocOn = com.shilapi.xcertplay.web.CarPlayHotspotManager.isLocationModeEnabled(this)
 
@@ -648,11 +648,20 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun wirelessLinkControls(parent: LinearLayout) {
         val mode = if (pendingCarHotspotSetup) WirelessHotspotMode.MANUAL else AirPlayPersistence.loadWirelessHotspotMode(this)
-        val modes = listOf(WirelessHotspotMode.MANUAL, WirelessHotspotMode.WIFI_P2P)
-        val titles = listOf(getString(R.string.built_in_car_hotspot), getString(R.string.wifi_direct))
+        val modes = listOf(
+            WirelessHotspotMode.LOCAL_ONLY_HOTSPOT,
+            WirelessHotspotMode.WIFI_P2P,
+            WirelessHotspotMode.MANUAL
+        )
+        val titles = listOf(
+            getString(R.string.hotspot_mode_local_title),
+            getString(R.string.wifi_direct),
+            getString(R.string.built_in_car_hotspot)
+        )
         val descriptions = listOf(
-            getString(R.string.hotspot_mode_manual_desc),
-            getString(R.string.hotspot_mode_p2p_desc)
+            getString(R.string.hotspot_mode_local_desc),
+            getString(R.string.hotspot_mode_p2p_desc),
+            getString(R.string.hotspot_mode_manual_desc)
         )
         val wide = resources.configuration.screenWidthDp >= 850
         val choices = if (wide) row().apply { gravity = Gravity.TOP } else column()
@@ -882,6 +891,9 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun connect(wireless: Boolean) {
+        if (wireless) {
+            com.shilapi.xcertplay.web.CarPlayHotspotManager.stopHotspot()
+        }
         if (wireless && pendingCarHotspotSetup) { toast(getString(R.string.save_your_hotspot_details_in_connection_setup_first)); page = "connection"; render(); return }
         if (setupError != null) { toast(setupError!!); return }
         if (wireless && AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL &&

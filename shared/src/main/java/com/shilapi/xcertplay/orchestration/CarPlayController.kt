@@ -98,6 +98,7 @@ sealed class CarPlayStatus {
         val bssid: String,
         val address: String,
         val backend: String,
+        val passphrase: String? = null,
     ) : CarPlayStatus()
     data object WaitingForPairedIphone : CarPlayStatus()
     data object ConnectingBluetooth : CarPlayStatus()
@@ -896,6 +897,7 @@ class CarPlayController(
                     bssid = deviceIdentifier,
                     address = hostAddressText,
                     backend = hotspotInfo.backend.label,
+                    passphrase = hotspotInfo.passphrase,
                 ),
             )
             onStatus(CarPlayStatus.WaitingForPairedIphone)

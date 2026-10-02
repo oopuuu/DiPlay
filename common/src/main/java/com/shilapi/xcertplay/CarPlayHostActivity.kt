@@ -2689,13 +2689,20 @@ class CarPlayHostActivity : ComponentActivity() {
         if (!wirelessEnabled) return
         hotspotStatus = when (status) {
             CarPlayStatus.StartingHotspot -> HotspotStatus(state = getString(R.string.starting))
-            is CarPlayStatus.HotspotReady -> HotspotStatus(
-                state = getString(R.string.ready),
-                ssid = status.ssid,
-                band = status.band,
-                channel = status.channel,
-                backend = status.backend,
-            )
+            is CarPlayStatus.HotspotReady -> {
+                CarPlayWebRemoteManager.updateActiveHotspot(
+                    ssid = status.ssid,
+                    password = status.passphrase,
+                    ip = status.address
+                )
+                HotspotStatus(
+                    state = getString(R.string.ready),
+                    ssid = status.ssid,
+                    band = status.band,
+                    channel = status.channel,
+                    backend = status.backend,
+                )
+            }
             CarPlayStatus.WaitingForPairedIphone ->
                 hotspotStatus.copy(state = getString(R.string.waiting_for_paired_iphone))
             CarPlayStatus.ConnectingBluetooth ->

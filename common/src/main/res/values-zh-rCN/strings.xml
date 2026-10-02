@@ -2,7 +2,9 @@
     <string name="built_in_car_hotspot">车载热点</string>
     <string name="wifi_direct">Wi-Fi Direct</string>
     <string name="hotspot_hint_manual">车载热点 · 保持车载热点、蓝牙和 iPhone 的 Wi-Fi 开启。</string>
-    <string name="hotspot_hint_local">打开“连接设置”以保存车载热点信息。</string>
+    <string name="hotspot_hint_local">免卡局域网热点 · 发起连接后手机将建立热点，iPhone 自动连入，特斯拉车机也可同时连入。</string>
+    <string name="hotspot_mode_local_title">无卡局域网热点 (推荐)</string>
+    <string name="hotspot_mode_local_desc">无需 SIM 卡或外部 Wi-Fi！手机自动开启单热点，iPhone 与特斯拉车机无线同时连入，零硬件冲突。</string>
     <string name="hotspot_hint_p2p">Wi-Fi Direct · 保持车机 Wi-Fi 开关、蓝牙和 iPhone 的 Wi-Fi 开启。</string>
     <string name="cluster_size_standard">标准 · 最清晰</string>
     <string name="cluster_size_larger">更大 · 默认</string>

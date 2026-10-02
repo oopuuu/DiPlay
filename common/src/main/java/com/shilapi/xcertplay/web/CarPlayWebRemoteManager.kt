@@ -53,6 +53,26 @@ object CarPlayWebRemoteManager {
     private var lastFpsTimestamp = System.currentTimeMillis()
     @Volatile private var currentFps = 0
 
+    var activeWirelessHotspotInfo: CarPlayHotspotManager.HotspotInfo? = null
+        private set
+
+    fun updateActiveHotspot(ssid: String, password: String?, ip: String?) {
+        val resolvedIp = ip ?: getLocalIpAddresses().firstOrNull() ?: "192.168.43.1"
+        val port = server?.port ?: 8088
+        activeWirelessHotspotInfo = CarPlayHotspotManager.HotspotInfo(
+            isActive = true,
+            isStarting = false,
+            ssid = ssid,
+            password = password,
+            ipAddress = resolvedIp,
+            webUrl = "http://$resolvedIp:$port"
+        )
+    }
+
+    fun clearActiveHotspot() {
+        activeWirelessHotspotInfo = null
+    }
+
     // Web microphone buffer
     private val webMicLock = Any()
     private val webMicStream = ByteArrayOutputStream()
