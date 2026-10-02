@@ -20,7 +20,7 @@ echo "[+] Copying files to $INSTALL_DIR..."
 # Copy static web directory
 cp -r "$ROOT_DIR/web" "$INSTALL_DIR/"
 
-# Copy binary if built, or python server as fallback
+# 1. Prefer precompiled binary
 if [ -f "$ROOT_DIR/bin/diplay-pi-arm64" ]; then
     cp "$ROOT_DIR/bin/diplay-pi-arm64" "$INSTALL_DIR/diplay-pi"
     chmod +x "$INSTALL_DIR/diplay-pi"
@@ -29,8 +29,15 @@ elif [ -f "$ROOT_DIR/bin/diplay-pi-armv7" ]; then
     cp "$ROOT_DIR/bin/diplay-pi-armv7" "$INSTALL_DIR/diplay-pi"
     chmod +x "$INSTALL_DIR/diplay-pi"
     EXEC_CMD="$INSTALL_DIR/diplay-pi -port 8088"
+# 2. Try compiling locally if go is available
+elif command -v go &>/dev/null; then
+    echo "[+] Local Go toolchain detected, building standalone binary in-situ..."
+    (cd "$ROOT_DIR" && go build -ldflags="-s -w" -o "$INSTALL_DIR/diplay-pi" server.go)
+    chmod +x "$INSTALL_DIR/diplay-pi"
+    EXEC_CMD="$INSTALL_DIR/diplay-pi -port 8088"
+# 3. Fallback to lightweight Python 3 asyncio runtime
 else
-    echo "[*] Binary not found, using Python 3 standalone runtime..."
+    echo "[*] Using Python 3 standalone runtime..."
     apt-get update && apt-get install -y python3-aiohttp python3-pip
     cp "$ROOT_DIR/server.py" "$INSTALL_DIR/server.py"
     chmod +x "$INSTALL_DIR/server.py"
@@ -64,4 +71,9 @@ echo "==========================================================================
 echo "  [✓] DiPlay-Pi Service installed and started!"
 echo "  Status check: sudo systemctl status diplay-pi"
 echo "  Service logs: sudo journalctl -u diplay-pi -f"
+echo ""
+echo "  Next step: Configure In-Car Wi-Fi Hotspot for Tesla:"
+echo "    sudo bash $ROOT_DIR/scripts/setup_ap_hotspot.sh 2.4g  # (Universal)"
+echo "    or"
+echo "    sudo bash $ROOT_DIR/scripts/setup_ap_hotspot.sh 5g    # (High Speed)"
 echo "=========================================================================="

@@ -121,6 +121,15 @@ func main() {
 	mux.HandleFunc("/api/resolution", handleResolution)
 	mux.HandleFunc("/snapshot", handleSnapshot)
 
+	// Captive Portal & Tesla Connectivity Check Bypass Routes (Fake 204 & Success)
+	mux.HandleFunc("/generate_204", handleCaptivePortal204)
+	mux.HandleFunc("/gen_204", handleCaptivePortal204)
+	mux.HandleFunc("/hotspot-detect.html", handleCaptivePortalSuccess)
+	mux.HandleFunc("/canonical.html", handleCaptivePortalSuccess)
+	mux.HandleFunc("/ncsi.txt", handleNcsi)
+	mux.HandleFunc("/connecttest.txt", handleConnectTest)
+	mux.HandleFunc("/success.txt", handleSuccessText)
+
 	server := &http.Server{
 		Addr:    fmt.Sprintf("0.0.0.0:%d", *port),
 		Handler: corsMiddleware(mux),
@@ -132,7 +141,20 @@ func main() {
 		}
 	}()
 
-	log.Printf("[DiPlay-Pi] Web Remote ready! Open browser at http://<RaspberryPi_IP>:%d", *port)
+	// Optionally start direct port 80 listener for Tesla convenience if run as root
+	if *port != 80 {
+		go func() {
+			p80Server := &http.Server{
+				Addr:    "0.0.0.0:80",
+				Handler: corsMiddleware(mux),
+			}
+			if err := p80Server.ListenAndServe(); err != nil {
+				log.Printf("[DiPlay-Pi] Port 80 direct binding not available (requires root/sudo or iptables redirect): %v", err)
+			}
+		}()
+	}
+
+	log.Printf("[DiPlay-Pi] Web Remote ready! Open browser at http://<RaspberryPi_IP>:%d (or http://192.168.43.1)", *port)
 
 	// Graceful shutdown on Ctrl+C / SIGTERM
 	sigChan := make(chan os.Signal, 1)
@@ -156,11 +178,49 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+func handleCaptivePortal204(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleCaptivePortalSuccess(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"))
+}
+
+func handleNcsi(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Microsoft NCSI"))
+}
+
+func handleConnectTest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Microsoft Connect Test"))
+}
+
+func handleSuccessText(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("success\n"))
+}
+
 func handleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
+	path := strings.ToLower(r.URL.Path)
+	if strings.Contains(path, "204") {
+		handleCaptivePortal204(w, r)
 		return
 	}
+	if strings.Contains(path, "hotspot-detect") || strings.Contains(path, "canonical") {
+		handleCaptivePortalSuccess(w, r)
+		return
+	}
+	if strings.Contains(path, "ncsi") {
+		handleNcsi(w, r)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Write(defaultHtml)

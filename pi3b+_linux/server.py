@@ -298,6 +298,21 @@ async def main():
     app.router.add_post("/api/resolution", handle_resolution)
     app.router.add_get("/snapshot", handle_snapshot)
 
+    # Tesla / Captive Portal Connectivity Check Spoofing (Fake 204)
+    async def handle_204(request):
+        return web.Response(status=204)
+
+    async def handle_success(request):
+        return web.Response(text="<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>", content_type="text/html")
+
+    app.router.add_get("/generate_204", handle_204)
+    app.router.add_get("/gen_204", handle_204)
+    app.router.add_get("/hotspot-detect.html", handle_success)
+    app.router.add_get("/canonical.html", handle_success)
+    app.router.add_get("/ncsi.txt", lambda r: web.Response(text="Microsoft NCSI"))
+    app.router.add_get("/connecttest.txt", lambda r: web.Response(text="Microsoft Connect Test"))
+    app.router.add_get("/success.txt", lambda r: web.Response(text="success\n"))
+
     # Allow CORS
     async def cors_middleware(app, handler):
         async def middleware(request):

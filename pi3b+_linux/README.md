@@ -147,20 +147,34 @@ sudo systemctl status diplay-pi
 
 ## 五、 一键配置车载 5GHz Wi-Fi 热点
 
-树莓派 3B+ 原生支持 5GHz 802.11ac Wi-Fi。在车内狭小空间中，**必须使用 5GHz 频段**，以彻底规避车载蓝牙和 2.4GHz 干扰带来的卡顿与掉帧。
+### 一键配置车载 Wi-Fi 热点与特斯拉连通性检测欺骗（Fake-204）
 
-执行一键配置脚本：
+树莓派 3B+ 原生支持 2.4GHz (802.11b/g/n) 与 5GHz (802.11ac) 双频 Wi-Fi。
+
+执行一键配置脚本（**默认 2.4GHz 全兼容模式，确保 100% 解决特斯拉车机搜不到或频段不兼容问题**）：
 ```bash
 cd /home/pi/pi3b+_linux
-sudo bash scripts/setup_ap_hotspot.sh
+
+# 选项 1：2.4GHz 全兼容模式（推荐首次部署使用，兼容所有批次特斯拉车机）
+sudo bash scripts/setup_ap_hotspot.sh 2.4g
+
+# 选项 2：5GHz 极速模式（Channel 36，适合支持 5G 的新款特斯拉车机）
+sudo bash scripts/setup_ap_hotspot.sh 5g
 ```
 
-**热点默认配置如下**：
+**热点及网络自动化特性**：
 - **SSID（热点名）**：`Tesla-CarPlay`
-- **密码**：`12345678`
-- **频段**：`5GHz (Channel 36, 802.11ac)`
+- **密码**：`diplay123456`
 - **树莓派固定 IP**：`192.168.43.1`
-- **车机分配 IP 段**：`192.168.43.100 ~ 192.168.43.200`
+- **【核心突破】特斯拉连通性检测欺骗（Fake-204）**：
+  - 自动通过 `dnsmasq` 拦截特斯拉发出的连通性探测请求（`clients3.google.com`, `connectivitycheck.gstatic.com`, `captive.apple.com`, `vn.teslamotors.com` 等）；
+  - 服务端统一返回 **`HTTP/1.1 204 No Content`**；
+  - **彻底解决特斯拉车机提示“无法访问互联网 / 请检查防火墙设置”并自动断开 Wi-Fi 的顽疾**！
+- **【80 端口直通】**：已配置 iptables 将 80 端口重定向至 8088 端口，车机在浏览器中**无需手动输入 `:8088`**。
+- **【双模网络：iPhone USB 有线共享】**：
+  - 脚本已内置 iptables NAT 转发规则；
+  - 若将 iPhone 用 Lightning/Type-C 数据线插入树莓派 USB 口，并在 iPhone 开启“个人热点（仅 USB）”，树莓派会自动将 iPhone 的 5G 高速网络通过 Wi-Fi 共享给特斯拉；
+  - 特斯拉不仅可以投屏，还能同时真正访问公网，自带的高德地图、网易云音乐、QQ音乐全部正常联网！
 
 ---
 
@@ -168,15 +182,21 @@ sudo bash scripts/setup_ap_hotspot.sh
 
 ### 1. 特斯拉车机 Wi-Fi 设置（关键步骤！）
 1. 进入特斯拉屏幕控制面板 -> 点击顶栏 **Wi-Fi 图标**。
-2. 搜索并连接 **`Tesla-CarPlay`**，输入密码 `12345678`。
-3. 连接成功后，**勾选“在前进挡 (D 挡) 时保持 Wi-Fi 连接”**（Remain connected in Drive）。这一步至关重要，能确保行驶中不断连。
+2. 搜索并连接 **`Tesla-CarPlay`**，输入密码 `diplay123456`。
+3. 连接成功后，点击 Wi-Fi 详情，**勾选“在前进挡 (D 挡) 时保持 Wi-Fi 连接”**（Remain connected in Drive）。这一步至关重要，能确保挂挡行驶中不断连。
+4. 此时特斯拉会顺利判定连通，不会再弹出“无互联网连接 / 防火墙错误”。
 
 ### 2. 打开车机浏览器访问
 1. 打开车机自带的 **浏览器 (Browser)**。
-2. 在地址栏输入并收藏：
+2. 在地址栏输入并收藏下列任意一个直达地址：
    ```text
-   http://192.168.43.1:8088
+   http://192.168.43.1
    ```
+   或使用友好域名（已内置 DNS 解析）：
+   ```text
+   http://diplay.com
+   ```
+   *(注：无需加 `:8088`，已做 80 端口自动重定向)*
 3. 车机将秒级加载 DiPlay-Pi 全屏交互界面：
    - **自适应横屏**：自动按照特斯拉 15 英寸大屏（1920x1064 / 1920x1200）自适应渲染。
    - **WebCodecs 硬件直通**：延迟控制在 35ms ~ 50ms 以内，60 FPS 流畅无卡顿。
