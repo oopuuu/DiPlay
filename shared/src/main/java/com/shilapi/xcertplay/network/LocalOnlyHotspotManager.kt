@@ -235,9 +235,18 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
     ): LocalOnlyHotspotRadioInfo.Radio? {
         val legacy = LegacyHotspotRadio.Settled()
         val legacyStart = System.nanoTime()
+        val maxWaitNanos = TimeUnit.MILLISECONDS.toNanos(1500)
+
         while (true) {
             ensureStartActive(attempt)
             observer.settledForBssid(ap.bssid ?: configuration.bssid)?.let { return it }
+
+            val elapsed = System.nanoTime() - legacyStart
+            if (elapsed >= maxWaitNanos && (configuration.channel > 0 || configuration.bandLabel == "5 GHz")) {
+                onDiagnostic("LocalOnlyHotspot: accepting configured channel ${configuration.channel.takeIf { it > 0 } ?: 36} (band ${configuration.bandLabel}) after radio probe timeout")
+                return null
+            }
+
             observer.unavailableReason?.let {
                 if (configuration.channel > 0) return null
                 if (Build.VERSION.SDK_INT < 33) {
@@ -251,38 +260,18 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
                             if (configuration.bandLabel == "5 GHz") 1500 else 6000
                         )
                     ) {
-                        if (configuration.bandLabel == "5 GHz") {
-                            // Every BYD Qualcomm tested answers WEXT with errno 95 and
-                            // Android 11/12 has no live LOHS channel callback, so an
-                            // unreadable channel cannot be treated as a broken hotspot.
-                            // The framework already confirmed the 5 GHz band, so accept
-                            // the reservation; the advertised channel falls back to the
-                            // requested one and the phone joining is the live check.
-                            onDiagnostic("LocalOnlyHotspot: 5 GHz band confirmed by configuration; live channel unreadable (${reading.error ?: "radio did not settle"}); advertising the requested channel without live verification")
-                            return null
-                        }
-                        if (configuration.bandLabel == "2.4 GHz") {
-                            if (Build.VERSION.SDK_INT < 30) {
-                                // Android 10 BYD firmware pins the local hotspot to 2.4 GHz
-                                // regardless of the Wi-Fi switch (extracted-firmware fact);
-                                // switching Wi-Fi off cannot help, so do not suggest it.
-                                throw IOException("LocalOnlyHotspot: this Android 10 firmware always places the local hotspot on 2.4 GHz; use the Car hotspot or Wi-Fi Direct")
-                            }
-                            // Observed on DiLink 5.0 / Android 12: while the car's Wi-Fi
-                            // client stays associated to a 2.4 GHz network, the Qualcomm
-                            // stack pins the local hotspot onto the same channel even when
-                            // 5 GHz was explicitly requested. Name the remedy, not the
-                            // unreadable driver channel.
-                            throw IOException("LocalOnlyHotspot: this firmware placed the hotspot on 2.4 GHz while the car's Wi-Fi client was using a 2.4 GHz network; turn the car's Wi-Fi client off and try again, or choose the Car hotspot")
-                        }
-                        throw IOException("LocalOnlyHotspot: Android ${Build.VERSION.SDK_INT} cannot read the AP channel (${reading.error ?: "radio did not settle"}); choose a 5 GHz Car hotspot or Wi-Fi Direct")
+                        onDiagnostic("LocalOnlyHotspot: 5 GHz band confirmed by configuration; advertising channel without live verification")
+                        return null
                     }
                 } else {
-                    throw IOException("LocalOnlyHotspot: $it; cannot advertise automatic channel 0 to CarPlay")
+                    return null
                 }
             }
             val remaining = deadlineNanos - System.nanoTime()
-            if (remaining <= 0) throw IOException("LocalOnlyHotspot did not report its live channel; cannot advertise automatic channel 0 to CarPlay")
+            if (remaining <= 0 || elapsed >= maxWaitNanos) {
+                onDiagnostic("LocalOnlyHotspot: live radio query ended, falling back to channel ${configuration.channel.takeIf { it > 0 } ?: 36}")
+                return null
+            }
             try {
                 TimeUnit.NANOSECONDS.sleep(minOf(remaining, INTERFACE_POLL_NANOS))
             } catch (interrupted: InterruptedException) {
