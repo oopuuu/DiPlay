@@ -21,8 +21,70 @@ type Button struct {
 }
 
 func (b *Button) Hit(x, y int) bool {
-	// Generous 10px margin around button for comfortable resistive screen taps
 	return x >= b.X-10 && x < b.X+b.W+10 && y >= b.Y-8 && y < b.Y+b.H+8
+}
+
+type CalibPoint struct {
+	TargetX, TargetY int
+	RawX, RawY       int
+}
+
+func solveAffine(points []CalibPoint) CalibrationData {
+	if len(points) < 3 {
+		return CalibrationData{Valid: false}
+	}
+
+	var sumRx2, sumRy2, sumRxRy, sumRx, sumRy float64
+	var sumSxRx, sumSxRy, sumSx float64
+	var sumSyRx, sumSyRy, sumSy float64
+	n := float64(len(points))
+
+	for _, p := range points {
+		rx := float64(p.RawX)
+		ry := float64(p.RawY)
+		sx := float64(p.TargetX)
+		sy := float64(p.TargetY)
+
+		sumRx2 += rx * rx
+		sumRy2 += ry * ry
+		sumRxRy += rx * ry
+		sumRx += rx
+		sumRy += ry
+
+		sumSxRx += sx * rx
+		sumSxRy += sx * ry
+		sumSx += sx
+
+		sumSyRx += sy * rx
+		sumSyRy += sy * ry
+		sumSy += sy
+	}
+
+	// 3x3 Determinant
+	det := sumRx2*(sumRy2*n-sumRy*sumRy) - sumRxRy*(sumRxRy*n-sumRy*sumRx) + sumRx*(sumRxRy*sumRy-sumRy2*sumRx)
+	if det == 0 {
+		return CalibrationData{Valid: false}
+	}
+
+	// Solve for A, B, C (X = A*rx + B*ry + C)
+	detA := sumSxRx*(sumRy2*n-sumRy*sumRy) - sumRxRy*(sumSxRy*n-sumRy*sumSx) + sumRx*(sumSxRy*sumRy-sumRy2*sumSx)
+	detB := sumRx2*(sumSxRy*n-sumRy*sumSx) - sumSxRx*(sumRxRy*n-sumRy*sumRx) + sumRx*(sumRxRy*sumSx-sumSxRy*sumRx)
+	detC := sumRx2*(sumRy2*sumSx-sumSxRy*sumRy) - sumRxRy*(sumRxRy*sumSx-sumSxRx*sumRy) + sumSxRx*(sumRxRy*sumRy-sumRy2*sumRx)
+
+	// Solve for D, E, F (Y = D*rx + E*ry + F)
+	detD := sumSyRx*(sumRy2*n-sumRy*sumRy) - sumRxRy*(sumSyRy*n-sumRy*sumSy) + sumRx*(sumSyRy*sumRy-sumRy2*sumSy)
+	detE := sumRx2*(sumSyRy*n-sumRy*sumSy) - sumSyRx*(sumRxRy*n-sumRy*sumRx) + sumRx*(sumRxRy*sumSy-sumSyRy*sumRx)
+	detF := sumRx2*(sumRy2*sumSy-sumSyRy*sumRy) - sumRxRy*(sumRxRy*sumSy-sumSyRx*sumRy) + sumSyRx*(sumRxRy*sumRy-sumRy2*sumRx)
+
+	return CalibrationData{
+		A:     detA / det,
+		B:     detB / det,
+		C:     detC / det,
+		D:     detD / det,
+		E:     detE / det,
+		F:     detF / det,
+		Valid: true,
+	}
 }
 
 func main() {
@@ -44,7 +106,6 @@ func main() {
 
 	mgr := NewManager()
 
-	// Initial trigger to ensure Bluetooth is active & discoverable
 	go func() {
 		time.Sleep(1 * time.Second)
 		mgr.MakeDiscoverable()
@@ -53,6 +114,17 @@ func main() {
 	currentTab := 0 // 0: 配对, 1: 投屏, 2: 网络, 3: 系统
 	tabs := []string{"配对", "投屏", "网络", "系统"}
 
+	// Calibration state machine
+	isCalibrating := false
+	calibStep := 0
+	calibTargets := []struct{ x, y int }{
+		{40, 40},   // Top-Left
+		{440, 40},  // Top-Right
+		{440, 280}, // Bottom-Right
+		{40, 280},  // Bottom-Left
+	}
+	var calibCollected []CalibPoint
+
 	// Handle graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -60,7 +132,6 @@ func main() {
 	ticker := time.NewTicker(33 * time.Millisecond) // ~30 FPS
 	defer ticker.Stop()
 
-	// Buttons for active Tab
 	var tabButtons []*Button
 
 	rebuildButtons := func() {
@@ -114,7 +185,17 @@ func main() {
 			})
 		case 3: // 系统
 			tabButtons = append(tabButtons, &Button{
-				ID: "btn_reboot", X: 265, Y: 70, W: 205, H: 48,
+				ID: "btn_calib", X: 265, Y: 46, W: 205, H: 44,
+				Text: "屏幕触控校准",
+				OnClick: func() {
+					isCalibrating = true
+					calibStep = 0
+					calibCollected = nil
+					mgr.SetBanner("进入校准向导: 请依次点击靶心")
+				},
+			})
+			tabButtons = append(tabButtons, &Button{
+				ID: "btn_reboot", X: 265, Y: 102, W: 205, H: 44,
 				Text: "重启树莓派",
 				OnClick: func() {
 					mgr.RebootPi()
@@ -125,7 +206,7 @@ func main() {
 
 	rebuildButtons()
 
-	// Touch cursor visualization
+	// Touch cursor tracking
 	touchX := -1
 	touchY := -1
 	touchRawX := 0
@@ -148,12 +229,36 @@ func main() {
 			touchRawY = ev.RawY
 			lastTouchTime = time.Now()
 
-			// Trigger immediately on touch press (fast responsive touch)
-			// Debounce 180ms to avoid double tap bouncing
-			if ev.Pressed && time.Since(lastTriggerTime) > 180*time.Millisecond {
+			if ev.Pressed && time.Since(lastTriggerTime) > 200*time.Millisecond {
 				lastTriggerTime = time.Now()
 
-				// 1. Check Bottom Dock Tabs (Y: 260 ~ 320)
+				// If in calibration wizard
+				if isCalibrating {
+					target := calibTargets[calibStep]
+					calibCollected = append(calibCollected, CalibPoint{
+						TargetX: target.x,
+						TargetY: target.y,
+						RawX:    ev.RawX,
+						RawY:    ev.RawY,
+					})
+					calibStep++
+
+					if calibStep >= len(calibTargets) {
+						// Calculate affine calibration
+						res := solveAffine(calibCollected)
+						if res.Valid {
+							input.SaveCalibration(res)
+							mgr.SetBanner("校准成功！已保存并生效")
+						} else {
+							mgr.SetBanner("校准计算失败，请重试")
+						}
+						isCalibrating = false
+						rebuildButtons()
+					}
+					continue
+				}
+
+				// Normal UI interaction
 				if ev.Y >= 260 {
 					tabW := (ScreenWidth - 16) / len(tabs)
 					for i := range tabs {
@@ -162,13 +267,12 @@ func main() {
 							if currentTab != i {
 								currentTab = i
 								rebuildButtons()
-								mgr.SetBanner("切换到标签: " + tabs[i])
+								mgr.SetBanner("切换到: " + tabs[i])
 							}
 							break
 						}
 					}
 				} else {
-					// 2. Check active Tab buttons
 					for _, b := range tabButtons {
 						if b.Hit(ev.X, ev.Y) {
 							if b.OnClick != nil {
@@ -181,41 +285,59 @@ func main() {
 			}
 
 		case <-ticker.C:
-			// Read status snapshots
 			mgr.Status.mu.RLock()
 			status := *mgr.Status
 			mgr.Status.mu.RUnlock()
 
-			// 1. Clear background
+			// Calibration Wizard Fullscreen View
+			if isCalibrating {
+				fb.Clear(ColBg)
+				fb.DrawCard(20, 20, ScreenWidth-40, ScreenHeight-40, "触控屏幕 4 点校准向导")
+
+				target := calibTargets[calibStep]
+				stepDesc := fmt.Sprintf("步骤 %d / 4: 请点击准星靶心", calibStep+1)
+				fb.DrawText(80, 80, stepDesc, ColPrimary, 1)
+				fb.DrawText(80, 110, "用手指或触控笔精确点击圆圈中心", ColWhite, 1)
+				fb.DrawText(80, 140, fmt.Sprintf("原始采样: X=%d, Y=%d", touchRawX, touchRawY), ColTextMuted, 1)
+
+				// Draw blinking calibration target
+				tx, ty := target.x, target.y
+				fb.FillRoundRect(tx-6, ty-6, 12, 12, 6, ColDanger)
+				fb.DrawRoundRect(tx-14, ty-14, 28, 28, 14, ColPrimary)
+				fb.DrawRoundRect(tx-22, ty-22, 44, 44, 22, ColWhite)
+				fb.DrawHLine(tx-30, ty, 60, ColPrimary)
+				fb.DrawVLine(tx, ty-30, 60, ColPrimary)
+
+				_ = fb.SwapBuffers()
+				continue
+			}
+
+			// Normal GUI View
 			fb.Clear(ColBg)
 
-			// 2. Render Header (Y: 0 ~ 34)
+			// 1. Header (Y: 0 ~ 34)
 			fb.FillRect(0, 0, ScreenWidth, 34, ColCardBg)
 			fb.DrawIcon(12, 9, "car", ColPrimary)
 			fb.DrawText(36, 9, "DiPlay", ColPrimary, 1)
 
-			// Center Time & Temp
 			nowStr := time.Now().Format("15:04:05")
 			timeText := fmt.Sprintf("%s · %.1f度", nowStr, status.CpuTemp)
 			fb.DrawText(155, 9, timeText, ColWhite, 1)
 
-			// Right Network / Touch Coordinates Badge
 			rightInfo := status.LocalIP
 			if time.Since(lastTouchTime) < 3*time.Second && touchX >= 0 {
 				rightInfo = fmt.Sprintf("触控:%d,%d 原:%d,%d", touchX, touchY, touchRawX, touchRawY)
 			}
-			fb.DrawText(300, 9, rightInfo, ColSuccess, 1)
+			fb.DrawText(275, 9, rightInfo, ColSuccess, 1)
 			fb.DrawHLine(0, 34, ScreenWidth, ColBorder)
 
-			// 3. Render Main Content based on Tab (Y: 42 ~ 258)
+			// 2. Main Content based on Tab (Y: 42 ~ 258)
 			switch currentTab {
-			case 0: // 📱 配对
-				// Left Card: Bluetooth & CarPlay Info
+			case 0: // 配对
 				fb.DrawCard(10, 42, 245, 218, "CarPlay 蓝牙配对")
 				fb.DrawIcon(20, 78, "bluetooth", ColPrimary)
 				fb.DrawText(38, 77, "设备: "+status.BtAlias, ColWhite, 1)
 
-				// Status badge
 				if status.BtDiscoverable {
 					fb.DrawBadge(20, 102, "正在广播中", ColSuccess, ColWhite)
 				} else {
@@ -237,13 +359,11 @@ func main() {
 
 				fb.DrawText(20, 226, "指引: 手机蓝牙搜索连接", ColTextMuted, 1)
 
-				// Right Action Buttons
 				for _, b := range tabButtons {
 					fb.DrawButton(b.X, b.Y, b.W, b.H, b.Text, false, b.Pressed, ColPrimary)
 				}
 
-			case 1: // 🚗 投屏
-				// Left Card: Streaming Pipeline
+			case 1: // 投屏
 				fb.DrawCard(10, 42, 245, 218, "车载投屏管道")
 
 				if status.DiPlayActive {
@@ -269,7 +389,6 @@ func main() {
 				fb.DrawText(20, 188, "极速低延迟解码", ColPrimary, 1)
 				fb.DrawText(20, 212, "车机全屏自适应", ColTextMuted, 1)
 
-				// Right Card: Access Guide & Button
 				fb.DrawCard(265, 42, 205, 96, "车机访问网址")
 				url := fmt.Sprintf("http://%s:8088", status.LocalIP)
 				if status.IsAPMode {
@@ -282,8 +401,7 @@ func main() {
 					fb.DrawButton(b.X, b.Y, b.W, b.H, b.Text, false, b.Pressed, ColPrimary)
 				}
 
-			case 2: // 🌐 网络
-				// Left Card: Current Network
+			case 2: // 网络
 				fb.DrawCard(10, 42, 245, 218, "网络连接状态")
 				fb.DrawText(20, 78, "模式: "+status.NetworkMode, ColWhite, 1)
 				fb.DrawText(20, 106, "IP: "+status.LocalIP, ColPrimary, 1)
@@ -294,13 +412,11 @@ func main() {
 				fb.DrawText(20, 196, "车载热点: Tesla-CarPlay", ColTextMuted, 1)
 				fb.DrawText(20, 220, "热点密码: diplay123456", ColTextMuted, 1)
 
-				// Right Buttons
 				for _, b := range tabButtons {
 					fb.DrawButton(b.X, b.Y, b.W, b.H, b.Text, false, b.Pressed, ColPrimary)
 				}
 
-			case 3: // ⚙️ 系统
-				// Left Card: System Diagnostics
+			case 3: // 系统
 				fb.DrawCard(10, 42, 245, 218, "系统运行状态")
 				fb.DrawText(20, 78, fmt.Sprintf("核心温度: %.1f度", status.CpuTemp), ColWhite, 1)
 				fb.DrawText(20, 106, fmt.Sprintf("开机运行: %s", status.UptimeStr), ColTextMuted, 1)
@@ -309,13 +425,12 @@ func main() {
 				fb.DrawText(20, 190, "屏幕: 3.5寸 480x320", ColPrimary, 1)
 				fb.DrawText(20, 218, "触控: XPT2046 驱动就绪", ColSuccess, 1)
 
-				// Right Buttons
 				for _, b := range tabButtons {
 					fb.DrawButton(b.X, b.Y, b.W, b.H, b.Text, false, b.Pressed, ColPrimary)
 				}
 			}
 
-			// 4. Render Bottom Dock (Y: 264 ~ 316)
+			// 3. Bottom Dock (Y: 264 ~ 316)
 			dockY := 264
 			tabW := (ScreenWidth - 16) / len(tabs)
 			for i, t := range tabs {
@@ -324,7 +439,7 @@ func main() {
 				fb.DrawButton(tx, dockY, tabW-4, 50, t, isActive, false, ColPrimary)
 			}
 
-			// 5. Toast Banner Message (if any)
+			// 4. Toast Banner
 			if time.Now().Before(status.BannerExpires) && status.BannerMsg != "" {
 				bannerW := 400
 				bannerH := 40
@@ -335,15 +450,14 @@ func main() {
 				fb.DrawText(bx+20, by+12, status.BannerMsg, ColWhite, 1)
 			}
 
-			// 6. Draw Touch Indicator (Red cursor with crosshair for instant touch feedback)
-			if time.Since(lastTouchTime) < 1*time.Second && touchX >= 0 {
-				fb.FillRoundRect(touchX-5, touchY-5, 10, 10, 5, ColDanger)
+			// 5. Draw Touch Indicator (Red cursor with crosshair for instant touch feedback)
+			if time.Since(lastTouchTime) < 2*time.Second && touchX >= 0 {
+				fb.FillRoundRect(touchX-4, touchY-4, 8, 8, 4, ColDanger)
 				fb.DrawRoundRect(touchX-12, touchY-12, 24, 24, 12, ColWarning)
 				fb.DrawHLine(touchX-18, touchY, 36, ColWarning)
 				fb.DrawVLine(touchX, touchY-18, 36, ColWarning)
 			}
 
-			// 7. Push buffer to Framebuffer (0-flicker double buffering)
 			_ = fb.SwapBuffers()
 		}
 	}

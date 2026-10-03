@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"log"
 	"os"
@@ -18,20 +19,33 @@ type TouchEvent struct {
 	Released bool
 }
 
+type CalibrationData struct {
+	A float64 `json:"a"`
+	B float64 `json:"b"`
+	C float64 `json:"c"`
+	D float64 `json:"d"`
+	E float64 `json:"e"`
+	F float64 `json:"f"`
+	Valid bool `json:"valid"`
+}
+
+const CalibFilePath = "/opt/diplay/touch_calib.json"
+
 type InputManager struct {
-	mu           sync.Mutex
-	touchDev     *os.File
-	mouseDev     *os.File
-	Events       chan TouchEvent
-	rawX         int
-	rawY         int
-	pressure     int
-	curX         int
-	curY         int
-	isPressed    bool
-	swapXY       bool
-	invX         bool
-	invY         bool
+	mu            sync.Mutex
+	touchDev      *os.File
+	mouseDev      *os.File
+	Events        chan TouchEvent
+	rawX          int
+	rawY          int
+	pressure      int
+	curX          int
+	curY          int
+	isPressed     bool
+	Calib         CalibrationData
+	swapXY        bool
+	invX          bool
+	invY          bool
 	lastTouchTime time.Time
 }
 
@@ -40,13 +54,14 @@ func NewInputManager(touchPath, mousePath string) *InputManager {
 		Events: make(chan TouchEvent, 64),
 		curX:   ScreenWidth / 2,
 		curY:   ScreenHeight / 2,
-		// Standard calibration for Waveshare / TFT35a 3.5-inch with rotate=90
+		// Fallback defaults if not calibrated
 		swapXY: true,
 		invX:   false,
 		invY:   true,
 	}
 
-	// Try open touch device
+	im.LoadCalibration()
+
 	if touchPath == "" {
 		touchPath = "/dev/input/event4"
 	}
@@ -60,7 +75,6 @@ func NewInputManager(touchPath, mousePath string) *InputManager {
 		log.Printf("[Input] Touchscreen not opened: %v", err)
 	}
 
-	// Fallback mouse device (/dev/input/mice)
 	if mousePath == "" {
 		mousePath = "/dev/input/mice"
 	}
@@ -73,6 +87,29 @@ func NewInputManager(touchPath, mousePath string) *InputManager {
 	return im
 }
 
+func (im *InputManager) LoadCalibration() {
+	if data, err := os.ReadFile(CalibFilePath); err == nil {
+		var c CalibrationData
+		if err := json.Unmarshal(data, &c); err == nil && c.Valid {
+			im.Calib = c
+			log.Printf("[Input] Loaded calibration from %s", CalibFilePath)
+			return
+		}
+	}
+	im.Calib.Valid = false
+}
+
+func (im *InputManager) SaveCalibration(c CalibrationData) {
+	c.Valid = true
+	im.mu.Lock()
+	im.Calib = c
+	im.mu.Unlock()
+
+	data, _ := json.MarshalIndent(c, "", "  ")
+	_ = os.WriteFile(CalibFilePath, data, 0644)
+	log.Printf("[Input] Saved new calibration to %s", CalibFilePath)
+}
+
 func (im *InputManager) Close() {
 	if im.touchDev != nil {
 		_ = im.touchDev.Close()
@@ -82,7 +119,6 @@ func (im *InputManager) Close() {
 	}
 }
 
-// watchdogReleaseLoop auto-releases touch if no events for 250ms (crucial for resistive screens)
 func (im *InputManager) watchdogReleaseLoop() {
 	ticker := time.NewTicker(80 * time.Millisecond)
 	defer ticker.Stop()
@@ -110,7 +146,6 @@ func (im *InputManager) watchdogReleaseLoop() {
 	}
 }
 
-// readTouchLoop parses Linux evdev input_event
 func (im *InputManager) readTouchLoop() {
 	buf := make([]byte, 24)
 	hasCoordUpdate := false
@@ -118,7 +153,6 @@ func (im *InputManager) readTouchLoop() {
 	for {
 		_, err := io.ReadFull(im.touchDev, buf)
 		if err != nil {
-			log.Printf("[Input] Touch read error: %v", err)
 			return
 		}
 
@@ -194,43 +228,51 @@ func (im *InputManager) readTouchLoop() {
 				im.lastTouchTime = time.Now()
 				im.isPressed = true
 
-				// Map raw ADS7846 coords (150 ~ 3950) to 480x320
-				rx := im.rawX
-				ry := im.rawY
-
-				if rx < 150 {
-					rx = 150
-				}
-				if rx > 3950 {
-					rx = 3950
-				}
-				if ry < 150 {
-					ry = 150
-				}
-				if ry > 3950 {
-					ry = 3950
-				}
-
-				normX := (rx - 150) * 1000 / 3800
-				normY := (ry - 150) * 1000 / 3800
-
 				var sx, sy int
-				if im.swapXY {
-					sx = normY * ScreenWidth / 1000
-					sy = normX * ScreenHeight / 1000
+
+				if im.Calib.Valid {
+					// Standard affine transformation
+					fx := im.Calib.A*float64(im.rawX) + im.Calib.B*float64(im.rawY) + im.Calib.C
+					fy := im.Calib.D*float64(im.rawX) + im.Calib.E*float64(im.rawY) + im.Calib.F
+					sx = int(fx)
+					sy = int(fy)
 				} else {
-					sx = normX * ScreenWidth / 1000
-					sy = normY * ScreenHeight / 1000
+					// Fallback bounding box map
+					rx := im.rawX
+					ry := im.rawY
+
+					if rx < 150 {
+						rx = 150
+					}
+					if rx > 3950 {
+						rx = 3950
+					}
+					if ry < 150 {
+						ry = 150
+					}
+					if ry > 3950 {
+						ry = 3950
+					}
+
+					normX := (rx - 150) * 1000 / 3800
+					normY := (ry - 150) * 1000 / 3800
+
+					if im.swapXY {
+						sx = normY * ScreenWidth / 1000
+						sy = normX * ScreenHeight / 1000
+					} else {
+						sx = normX * ScreenWidth / 1000
+						sy = normY * ScreenHeight / 1000
+					}
+
+					if im.invX {
+						sx = ScreenWidth - 1 - sx
+					}
+					if im.invY {
+						sy = ScreenHeight - 1 - sy
+					}
 				}
 
-				if im.invX {
-					sx = ScreenWidth - 1 - sx
-				}
-				if im.invY {
-					sy = ScreenHeight - 1 - sy
-				}
-
-				// Clamp screen coords
 				if sx < 0 {
 					sx = 0
 				}
@@ -267,7 +309,6 @@ func (im *InputManager) readTouchLoop() {
 	}
 }
 
-// readMouseLoop parses standard PS/2 mice packets
 func (im *InputManager) readMouseLoop() {
 	buf := make([]byte, 3)
 	wasLeftDown := false
