@@ -129,16 +129,16 @@ func (im *InputManager) LoadCalibration() {
 	}
 
 	// 3. Fallback to Official GoodTFT LCD-show 3.5" (rotate=90) Golden Calibration
-	// Official specification: Option "Calibration" "3936 227 268 3880", Option "SwapAxes" "1"
+	// Official specification with correct physical orientation:
 	// Screen X = (rawY - 268) * 480 / (3880 - 268) = 0.13289*rawY - 35.6146
-	// Screen Y = (3936 - rawX) * 320 / (3936 - 227) = -0.08627*rawX + 339.5632
+	// Screen Y = (rawX - 227) * 320 / (3936 - 227) =  0.08627*rawX - 19.5843
 	im.Calib = CalibrationData{
 		A:     0.0,
 		B:     480.0 / (3880.0 - 268.0),
 		C:     -268.0 * 480.0 / (3880.0 - 268.0),
-		D:     -320.0 / (3936.0 - 227.0),
+		D:     320.0 / (3936.0 - 227.0),
 		E:     0.0,
-		F:     3936.0 * 320.0 / (3936.0 - 227.0),
+		F:     -227.0 * 320.0 / (3936.0 - 227.0),
 		Valid: true,
 	}
 	log.Printf("[Input] Loaded factory golden calibration for 3.5\" rotate=90 (A=%.5f, B=%.5f, C=%.2f, D=%.5f, E=%.5f, F=%.2f)",
