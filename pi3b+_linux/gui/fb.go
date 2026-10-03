@@ -173,6 +173,31 @@ func (fb *Framebuffer) DrawRoundRect(x, y, w, h, r int, color uint16) {
 	fb.DrawVLine(x+w-1, y+r, h-2*r, color)
 }
 
+// DrawCircle draws an anti-aliased Bresenham hollow circle
+func (fb *Framebuffer) DrawCircle(cx, cy, r int, color uint16) {
+	x := r
+	y := 0
+	err := 0
+
+	for x >= y {
+		fb.SetPixel(cx+x, cy+y, color)
+		fb.SetPixel(cx+y, cy+x, color)
+		fb.SetPixel(cx-y, cy+x, color)
+		fb.SetPixel(cx-x, cy+y, color)
+		fb.SetPixel(cx-x, cy-y, color)
+		fb.SetPixel(cx-y, cy-x, color)
+		fb.SetPixel(cx+y, cy-x, color)
+		fb.SetPixel(cx+x, cy-y, color)
+
+		y++
+		err += 1 + 2*y
+		if 2*(err-x)+1 > 0 {
+			x--
+			err += 1 - 2*x
+		}
+	}
+}
+
 func sqrt(v float64) float64 {
 	// Simple Newton-Raphson for zero dependency
 	if v <= 0 {

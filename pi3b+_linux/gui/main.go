@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -30,59 +31,100 @@ type CalibPoint struct {
 }
 
 func solveAffine(points []CalibPoint) CalibrationData {
-	if len(points) < 3 {
+	n := float64(len(points))
+	if n < 3 {
+		log.Printf("[Calib-Math] Error: points count < 3 (%d)", len(points))
 		return CalibrationData{Valid: false}
 	}
 
-	var sumRx2, sumRy2, sumRxRy, sumRx, sumRy float64
-	var sumSxRx, sumSxRy, sumSx float64
-	var sumSyRx, sumSyRy, sumSy float64
-	n := float64(len(points))
+	// 1. Calculate centroid means
+	var meanRx, meanRy, meanSx, meanSy float64
+	var minRx, maxRx, minRy, maxRy int
+	minRx, maxRx = points[0].RawX, points[0].RawX
+	minRy, maxRy = points[0].RawY, points[0].RawY
+
+	for i, p := range points {
+		log.Printf("[Calib-Math] Point %d: Target=(%d, %d), Raw=(%d, %d)", i, p.TargetX, p.TargetY, p.RawX, p.RawY)
+		meanRx += float64(p.RawX)
+		meanRy += float64(p.RawY)
+		meanSx += float64(p.TargetX)
+		meanSy += float64(p.TargetY)
+
+		if p.RawX < minRx {
+			minRx = p.RawX
+		}
+		if p.RawX > maxRx {
+			maxRx = p.RawX
+		}
+		if p.RawY < minRy {
+			minRy = p.RawY
+		}
+		if p.RawY > maxRy {
+			maxRy = p.RawY
+		}
+	}
+	meanRx /= n
+	meanRy /= n
+	meanSx /= n
+	meanSy /= n
+
+	// Check point diversity: span must be reasonable (> 300 raw units)
+	spanX := maxRx - minRx
+	spanY := maxRy - minRy
+	log.Printf("[Calib-Math] Raw span: dX=%d, dY=%d", spanX, spanY)
+	if spanX < 300 || spanY < 300 {
+		log.Printf("[Calib-Math] Points clustered together! Span too small.")
+		return CalibrationData{Valid: false}
+	}
+
+	// 2. Centered Normal Equations (2x2 Covariance System)
+	var sUU, sVV, sUV float64
+	var sUX, sVX float64
+	var sUY, sVY float64
 
 	for _, p := range points {
-		rx := float64(p.RawX)
-		ry := float64(p.RawY)
-		sx := float64(p.TargetX)
-		sy := float64(p.TargetY)
+		u := float64(p.RawX) - meanRx
+		v := float64(p.RawY) - meanRy
+		xPrime := float64(p.TargetX) - meanSx
+		yPrime := float64(p.TargetY) - meanSy
 
-		sumRx2 += rx * rx
-		sumRy2 += ry * ry
-		sumRxRy += rx * ry
-		sumRx += rx
-		sumRy += ry
+		sUU += u * u
+		sVV += v * v
+		sUV += u * v
 
-		sumSxRx += sx * rx
-		sumSxRy += sx * ry
-		sumSx += sx
+		sUX += u * xPrime
+		sVX += v * xPrime
 
-		sumSyRx += sy * rx
-		sumSyRy += sy * ry
-		sumSy += sy
+		sUY += u * yPrime
+		sVY += v * yPrime
 	}
 
-	// 3x3 Determinant
-	det := sumRx2*(sumRy2*n-sumRy*sumRy) - sumRxRy*(sumRxRy*n-sumRy*sumRx) + sumRx*(sumRxRy*sumRy-sumRy2*sumRx)
-	if det == 0 {
+	det := sUU*sVV - sUV*sUV
+	log.Printf("[Calib-Math] Covariance 2x2 Determinant = %e", det)
+	if det <= 1e-4 {
+		log.Printf("[Calib-Math] Points are collinear or degenerate!")
 		return CalibrationData{Valid: false}
 	}
 
-	// Solve for A, B, C (X = A*rx + B*ry + C)
-	detA := sumSxRx*(sumRy2*n-sumRy*sumRy) - sumRxRy*(sumSxRy*n-sumRy*sumSx) + sumRx*(sumSxRy*sumRy-sumRy2*sumSx)
-	detB := sumRx2*(sumSxRy*n-sumRy*sumSx) - sumSxRx*(sumRxRy*n-sumRy*sumRx) + sumRx*(sumRxRy*sumSx-sumSxRy*sumRx)
-	detC := sumRx2*(sumRy2*sumSx-sumSxRy*sumRy) - sumRxRy*(sumRxRy*sumSx-sumSxRx*sumRy) + sumSxRx*(sumRxRy*sumRy-sumRy2*sumRx)
+	// Solve for A, B, C: X = A*rx + B*ry + C
+	A := (sUX*sVV - sVX*sUV) / det
+	B := (sUU*sVX - sUV*sUX) / det
+	C := meanSx - A*meanRx - B*meanRy
 
-	// Solve for D, E, F (Y = D*rx + E*ry + F)
-	detD := sumSyRx*(sumRy2*n-sumRy*sumRy) - sumRxRy*(sumSyRy*n-sumRy*sumSy) + sumRx*(sumSyRy*sumRy-sumRy2*sumSy)
-	detE := sumRx2*(sumSyRy*n-sumRy*sumSy) - sumSyRx*(sumRxRy*n-sumRy*sumRx) + sumRx*(sumRxRy*sumSy-sumSyRy*sumRx)
-	detF := sumRx2*(sumRy2*sumSy-sumSyRy*sumRy) - sumRxRy*(sumRxRy*sumSy-sumSyRx*sumRy) + sumSyRx*(sumRxRy*sumRy-sumRy2*sumRx)
+	// Solve for D, E, F: Y = D*rx + E*ry + F
+	D := (sUY*sVV - sVY*sUV) / det
+	E := (sUU*sVY - sUV*sUY) / det
+	F := meanSy - D*meanRx - E*meanRy
+
+	log.Printf("[Calib-Math] Solved Affine: X = %.5f*rx + %.5f*ry + %.2f, Y = %.5f*rx + %.5f*ry + %.2f", A, B, C, D, E, F)
 
 	return CalibrationData{
-		A:     detA / det,
-		B:     detB / det,
-		C:     detC / det,
-		D:     detD / det,
-		E:     detE / det,
-		F:     detF / det,
+		A:     A,
+		B:     B,
+		C:     C,
+		D:     D,
+		E:     E,
+		F:     F,
 		Valid: true,
 	}
 }
@@ -91,6 +133,7 @@ func main() {
 	fbPath := flag.String("fb", "/dev/fb1", "Path to framebuffer device")
 	touchPath := flag.String("touch", "/dev/input/event4", "Path to touchscreen event device")
 	mousePath := flag.String("mouse", "/dev/input/mice", "Path to mouse device")
+	startCalib := flag.Bool("calib", false, "Start directly in calibration mode")
 	flag.Parse()
 
 	log.Printf("[DiPlay-GUI] Initializing 3.5-inch Car GUI (480x320)...")
@@ -115,26 +158,48 @@ func main() {
 	tabs := []string{"配对", "投屏", "网络", "系统"}
 
 	// Calibration state machine
-	isCalibrating := false
+	// Calibration state machine: start only if flag -calib is passed
+	isCalibrating := *startCalib
+	calibStage := 0 // 0: 4点采样向导, 1: 触控验证画板
 	calibStep := 0
-	calibTargets := []struct{ x, y int }{
-		{40, 40},   // Top-Left
-		{440, 40},  // Top-Right
-		{440, 280}, // Bottom-Right
-		{40, 280},  // Bottom-Left
+	type CalibTargetDef struct {
+		x, y int
+		name string
+	}
+	calibTargets := []CalibTargetDef{
+		{x: 40, y: 40, name: "左上角"},
+		{x: 440, y: 40, name: "右上角"},
+		{x: 440, y: 280, name: "右下角"},
+		{x: 40, y: 280, name: "左下角"},
 	}
 	var calibCollected []CalibPoint
+	var calibResult CalibrationData
+	type TrailPoint struct {
+		X, Y int
+	}
+	var testTrail []TrailPoint
+	calibIgnoredMsg := ""
+	calibIgnoredExpires := time.Time{}
+	rebootConfirming := false
+	touchDownDuringCalib := false
+	pointCapturedFeedback := false
+	pointCapturedFeedbackTime := time.Time{}
 
-	// Handle graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	// Handle graceful shutdown and SIGUSR1 for calibration
+	sigChan := make(chan os.Signal, 2)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1)
 
 	ticker := time.NewTicker(33 * time.Millisecond) // ~30 FPS
 	defer ticker.Stop()
 
-	var tabButtons []*Button
+	// Watchdog for calibration trigger file
+	calibWatchTicker := time.NewTicker(500 * time.Millisecond)
+	defer calibWatchTicker.Stop()
 
-	rebuildButtons := func() {
+	var tabButtons []*Button
+	var rebuildButtons func()
+
+	rebuildButtons = func() {
 		tabButtons = nil
 
 		switch currentTab {
@@ -185,20 +250,47 @@ func main() {
 			})
 		case 3: // 系统
 			tabButtons = append(tabButtons, &Button{
-				ID: "btn_calib", X: 265, Y: 46, W: 205, H: 44,
-				Text: "屏幕触控校准",
+				ID: "btn_reset_calib", X: 265, Y: 46, W: 205, H: 44,
+				Text: "恢复出厂校准",
 				OnClick: func() {
-					isCalibrating = true
-					calibStep = 0
-					calibCollected = nil
-					mgr.SetBanner("进入校准向导: 请依次点击靶心")
+					_ = os.Remove(CalibFilePath)
+					_ = os.Remove("/etc/pointercal")
+					input.LoadCalibration()
+					mgr.SetBanner("已恢复官方出厂黄金校准！")
 				},
 			})
 			tabButtons = append(tabButtons, &Button{
-				ID: "btn_reboot", X: 265, Y: 102, W: 205, H: 44,
-				Text: "重启树莓派",
+				ID: "btn_ts_calib", X: 265, Y: 100, W: 205, H: 44,
+				Text: "启动官方驱动校准",
 				OnClick: func() {
-					mgr.RebootPi()
+					mgr.SetBanner("正在调用官方驱动校准 ts_calibrate...")
+					go func() {
+						cmd := exec.Command("sh", "-c", "sudo TSLIB_FBDEVICE=/dev/fb1 TSLIB_TSDEVICE=/dev/input/event4 ts_calibrate")
+						_ = cmd.Run()
+						input.LoadCalibration()
+					}()
+				},
+			})
+			rebootText := "重启树莓派"
+			if rebootConfirming {
+				rebootText = "再次点击确认重启"
+			}
+			tabButtons = append(tabButtons, &Button{
+				ID: "btn_reboot", X: 265, Y: 154, W: 205, H: 44,
+				Text: rebootText,
+				OnClick: func() {
+					if rebootConfirming {
+						mgr.RebootPi()
+					} else {
+						rebootConfirming = true
+						mgr.SetBanner("请再次点击按钮确认重启系统")
+						rebuildButtons()
+						go func() {
+							time.Sleep(5 * time.Second)
+							rebootConfirming = false
+							rebuildButtons()
+						}()
+					}
 				},
 			})
 		}
@@ -216,11 +308,31 @@ func main() {
 
 	for {
 		select {
-		case <-sigChan:
+		case s := <-sigChan:
+			if s == syscall.SIGUSR1 {
+				isCalibrating = true
+				calibStage = 0
+				calibStep = 0
+				calibCollected = nil
+				testTrail = nil
+				log.Println("[DiPlay-GUI] Calibration triggered via SIGUSR1!")
+				continue
+			}
 			log.Println("[DiPlay-GUI] Exiting...")
 			fb.Clear(ColBg)
 			_ = fb.SwapBuffers()
 			return
+
+		case <-calibWatchTicker.C:
+			if _, err := os.Stat("/tmp/trigger_calib"); err == nil {
+				_ = os.Remove("/tmp/trigger_calib")
+				isCalibrating = true
+				calibStage = 0
+				calibStep = 0
+				calibCollected = nil
+				testTrail = nil
+				log.Println("[DiPlay-GUI] Calibration triggered via /tmp/trigger_calib!")
+			}
 
 		case ev := <-input.Events:
 			touchX = ev.X
@@ -229,34 +341,98 @@ func main() {
 			touchRawY = ev.RawY
 			lastTouchTime = time.Now()
 
-			if ev.Pressed && time.Since(lastTriggerTime) > 200*time.Millisecond {
-				lastTriggerTime = time.Now()
+			if isCalibrating {
+				if calibStage == 0 {
+					// 自动检测手指是否已经抬起离开屏幕
+					if ev.Released || time.Since(lastTouchTime) > 150*time.Millisecond {
+						touchDownDuringCalib = false
+					}
 
-				// If in calibration wizard
-				if isCalibrating {
-					target := calibTargets[calibStep]
-					calibCollected = append(calibCollected, CalibPoint{
-						TargetX: target.x,
-						TargetY: target.y,
-						RawX:    ev.RawX,
-						RawY:    ev.RawY,
-					})
-					calibStep++
-
-					if calibStep >= len(calibTargets) {
-						// Calculate affine calibration
-						res := solveAffine(calibCollected)
-						if res.Valid {
-							input.SaveCalibration(res)
-							mgr.SetBanner("校准成功！已保存并生效")
-						} else {
-							mgr.SetBanner("校准计算失败，请重试")
+					if ev.Pressed {
+						if touchDownDuringCalib {
+							// 核心防连击：手指未曾抬起，坚决不触发下一次采样！
+							continue
 						}
-						isCalibrating = false
-						rebuildButtons()
+						touchDownDuringCalib = true
+
+						// 关键防误触：如果用户点在屏幕中央（例如 RawX 和 RawY 在 1400~2600 范围内）
+						if ev.RawX > 1400 && ev.RawX < 2600 && ev.RawY > 1400 && ev.RawY < 2600 {
+							calibIgnoredMsg = "已忽略: 检测到点击屏幕中央，请点击角上的靶心！"
+							calibIgnoredExpires = time.Now().Add(2500 * time.Millisecond)
+							log.Println("[Calib] Ignored center click")
+							continue
+						}
+
+						target := calibTargets[calibStep]
+						calibCollected = append(calibCollected, CalibPoint{
+							TargetX: target.x,
+							TargetY: target.y,
+							RawX:    ev.RawX,
+							RawY:    ev.RawY,
+						})
+						log.Printf("[Calib] Recorded Step %d/4 (%s): Target=(%d, %d), Raw=(%d, %d)",
+							calibStep+1, target.name, target.x, target.y, ev.RawX, ev.RawY)
+
+						pointCapturedFeedback = true
+						pointCapturedFeedbackTime = time.Now()
+						calibStep++
+
+						if calibStep >= len(calibTargets) {
+							// 4点采集完成，解算仿射变换矩阵
+							res := solveAffine(calibCollected)
+							if res.Valid {
+								calibResult = res
+								input.ApplyTemporaryCalibration(res)
+								calibStage = 1 // 进入验证画板
+								testTrail = nil
+								log.Println("[Calib] 4-point calibration successfully solved! Entering test canvas.")
+							} else {
+								calibStep = 0
+								calibCollected = nil
+								calibIgnoredMsg = "采样点分布异常，请点击四个不同角落！"
+								calibIgnoredExpires = time.Now().Add(3 * time.Second)
+								log.Println("[Calib] Calibration solve failed, resetting.")
+							}
+						}
+					}
+					continue
+				} else if calibStage == 1 {
+					// 验证画板阶段
+					if ev.Pressed {
+						// 检查是否点击了左下角【重新校准】按钮: X: 20~220, Y: 250~315
+						if ev.X >= 20 && ev.X <= 220 && ev.Y >= 250 && ev.Y <= 315 {
+							calibStage = 0
+							calibStep = 0
+							calibCollected = nil
+							testTrail = nil
+							continue
+						}
+						// 检查是否点击了右下角【确认保存】按钮: X: 260~460, Y: 250~315
+						if ev.X >= 260 && ev.X <= 460 && ev.Y >= 250 && ev.Y <= 315 {
+							input.SaveCalibration(calibResult)
+							isCalibrating = false
+							calibStage = 0
+							mgr.SetBanner("校准成功！已保存并生效")
+							rebuildButtons()
+							continue
+						}
+					}
+
+					// 记录手指在画板上的连续划线轨迹
+					if ev.Pressed || time.Since(lastTouchTime) < 150*time.Millisecond {
+						if ev.Y < 245 { // 仅在绘图区记录
+							testTrail = append(testTrail, TrailPoint{X: ev.X, Y: ev.Y})
+							if len(testTrail) > 100 {
+								testTrail = testTrail[len(testTrail)-100:]
+							}
+						}
 					}
 					continue
 				}
+			}
+
+			if ev.Pressed && time.Since(lastTriggerTime) > 200*time.Millisecond {
+				lastTriggerTime = time.Now()
 
 				// Normal UI interaction
 				if ev.Y >= 260 {
@@ -291,25 +467,83 @@ func main() {
 
 			// Calibration Wizard Fullscreen View
 			if isCalibrating {
-				fb.Clear(ColBg)
-				fb.DrawCard(20, 20, ScreenWidth-40, ScreenHeight-40, "触控屏幕 4 点校准向导")
+				if calibStage == 0 {
+					fb.Clear(ColBg)
 
-				target := calibTargets[calibStep]
-				stepDesc := fmt.Sprintf("步骤 %d / 4: 请点击准星靶心", calibStep+1)
-				fb.DrawText(80, 80, stepDesc, ColPrimary, 1)
-				fb.DrawText(80, 110, "用手指或触控笔精确点击圆圈中心", ColWhite, 1)
-				fb.DrawText(80, 140, fmt.Sprintf("原始采样: X=%d, Y=%d", touchRawX, touchRawY), ColTextMuted, 1)
+					target := calibTargets[calibStep]
 
-				// Draw blinking calibration target
-				tx, ty := target.x, target.y
-				fb.FillRoundRect(tx-6, ty-6, 12, 12, 6, ColDanger)
-				fb.DrawRoundRect(tx-14, ty-14, 28, 28, 14, ColPrimary)
-				fb.DrawRoundRect(tx-22, ty-22, 44, 44, 22, ColWhite)
-				fb.DrawHLine(tx-30, ty, 60, ColPrimary)
-				fb.DrawVLine(tx, ty-30, 60, ColPrimary)
+					// 屏幕中央大字指引
+					stepTitle := fmt.Sprintf("第 %d / 4 步: 请点击 [%s] 靶心", calibStep+1, target.name)
+					fb.DrawText(50, 110, stepTitle, ColPrimary, 1)
 
-				_ = fb.SwapBuffers()
-				continue
+					if pointCapturedFeedback && time.Since(pointCapturedFeedbackTime) < 500*time.Millisecond {
+						fb.DrawText(50, 140, "采集成功！请松开手指...", ColSuccess, 1)
+					} else {
+						fb.DrawText(50, 140, "注意: 靶心在屏幕边缘角落，请勿点击中央", ColWarning, 1)
+					}
+					fb.DrawText(50, 170, fmt.Sprintf("当前原始采样: X=%d, Y=%d", touchRawX, touchRawY), ColTextMuted, 1)
+
+					if time.Now().Before(calibIgnoredExpires) && calibIgnoredMsg != "" {
+						fb.DrawText(30, 200, calibIgnoredMsg, ColDanger, 1)
+					}
+
+					// 绘制角上的动态同心圆靶心
+					tx, ty := target.x, target.y
+					targetCol := ColDanger
+					if pointCapturedFeedback && time.Since(pointCapturedFeedbackTime) < 500*time.Millisecond {
+						targetCol = ColSuccess
+					}
+
+					fb.FillRoundRect(tx-8, ty-8, 16, 16, 8, targetCol)
+					fb.DrawCircle(tx, ty, 16, ColPrimary)
+					fb.DrawCircle(tx, ty, 26, ColWhite)
+					fb.DrawHLine(tx-35, ty, 70, ColPrimary)
+					fb.DrawVLine(tx, ty-35, 70, ColPrimary)
+
+					// 靶心旁边的箭头文字
+					switch calibStep {
+					case 0: // 左上角
+						fb.DrawText(tx+35, ty+10, "<- 请点击这里", ColSuccess, 1)
+					case 1: // 右上角
+						fb.DrawText(tx-135, ty+10, "请点击这里 ->", ColSuccess, 1)
+					case 2: // 右下角
+						fb.DrawText(tx-135, ty-20, "请点击这里 ->", ColSuccess, 1)
+					case 3: // 左下角
+						fb.DrawText(tx+35, ty-20, "<- 请点击这里", ColSuccess, 1)
+					}
+
+					_ = fb.SwapBuffers()
+					continue
+				} else if calibStage == 1 {
+					// 验证画板模式
+					fb.Clear(ColBg)
+
+					fb.DrawCard(10, 10, ScreenWidth-20, 235, "触控校准验证: 请在屏幕滑动划线")
+					fb.DrawText(30, 45, "手指在上方划线滑动，观察十字准星是否紧跟手指", ColWhite, 1)
+					fb.DrawText(30, 70, "如果位置准确无误，请点击右下方【确认并保存】", ColSuccess, 1)
+
+					// 绘制划线轨迹
+					for i := 1; i < len(testTrail); i++ {
+						p1 := testTrail[i-1]
+						p2 := testTrail[i]
+						fb.DrawLine(p1.X, p1.Y, p2.X, p2.Y, ColPrimary)
+					}
+
+					// 绘制当前手指触摸的十字准星
+					if time.Since(lastTouchTime) < 2*time.Second && touchX >= 0 {
+						fb.FillRoundRect(touchX-5, touchY-5, 10, 10, 5, ColDanger)
+						fb.DrawRoundRect(touchX-15, touchY-15, 30, 30, 15, ColWarning)
+						fb.DrawHLine(touchX-25, touchY, 50, ColWarning)
+						fb.DrawVLine(touchX, touchY-25, 50, ColWarning)
+					}
+
+					// 绘制底部两个大按钮
+					fb.DrawButton(30, 255, 190, 52, "重新校准", false, false, ColDanger)
+					fb.DrawButton(260, 255, 190, 52, "确认并保存", true, false, ColSuccess)
+
+					_ = fb.SwapBuffers()
+					continue
+				}
 			}
 
 			// Normal GUI View

@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -20,33 +22,33 @@ type TouchEvent struct {
 }
 
 type CalibrationData struct {
-	A float64 `json:"a"`
-	B float64 `json:"b"`
-	C float64 `json:"c"`
-	D float64 `json:"d"`
-	E float64 `json:"e"`
-	F float64 `json:"f"`
-	Valid bool `json:"valid"`
+	A     float64 `json:"a"`
+	B     float64 `json:"b"`
+	C     float64 `json:"c"`
+	D     float64 `json:"d"`
+	E     float64 `json:"e"`
+	F     float64 `json:"f"`
+	Valid bool    `json:"valid"`
 }
 
 const CalibFilePath = "/opt/diplay/touch_calib.json"
 
 type InputManager struct {
-	mu            sync.Mutex
-	touchDev      *os.File
-	mouseDev      *os.File
-	Events        chan TouchEvent
-	rawX          int
-	rawY          int
-	pressure      int
-	curX          int
-	curY          int
-	isPressed     bool
-	Calib         CalibrationData
-	swapXY        bool
-	invX          bool
-	invY          bool
-	lastTouchTime time.Time
+	mu             sync.Mutex
+	touchDev       *os.File
+	mouseDev       *os.File
+	Events         chan TouchEvent
+	rawX           int
+	rawY           int
+	pressure       int
+	curX           int
+	curY           int
+	isPressed      bool
+	Calib          CalibrationData
+	lastTouchTime  time.Time
+	hasFilterState bool
+	filterX        float64
+	filterY        float64
 }
 
 func NewInputManager(touchPath, mousePath string) *InputManager {
@@ -54,10 +56,6 @@ func NewInputManager(touchPath, mousePath string) *InputManager {
 		Events: make(chan TouchEvent, 64),
 		curX:   ScreenWidth / 2,
 		curY:   ScreenHeight / 2,
-		// Fallback defaults if not calibrated
-		swapXY: true,
-		invX:   false,
-		invY:   true,
 	}
 
 	im.LoadCalibration()
@@ -88,21 +86,78 @@ func NewInputManager(touchPath, mousePath string) *InputManager {
 }
 
 func (im *InputManager) LoadCalibration() {
+	// 1. Try /etc/pointercal (official tslib standard output)
+	if data, err := os.ReadFile("/etc/pointercal"); err == nil {
+		fields := strings.Fields(string(data))
+		if len(fields) >= 7 {
+			var vals [7]float64
+			valid := true
+			for i := 0; i < 7; i++ {
+				if v, err := strconv.ParseFloat(fields[i], 64); err == nil {
+					vals[i] = v
+				} else {
+					valid = false
+					break
+				}
+			}
+			if valid && vals[6] != 0 {
+				scale := vals[6]
+				im.Calib = CalibrationData{
+					A:     vals[0] / scale,
+					B:     vals[1] / scale,
+					C:     vals[2] / scale,
+					D:     vals[3] / scale,
+					E:     vals[4] / scale,
+					F:     vals[5] / scale,
+					Valid: true,
+				}
+				log.Printf("[Input] Loaded official tslib calibration from /etc/pointercal: A=%.5f B=%.5f C=%.1f D=%.5f E=%.5f F=%.1f",
+					im.Calib.A, im.Calib.B, im.Calib.C, im.Calib.D, im.Calib.E, im.Calib.F)
+				return
+			}
+		}
+	}
+
+	// 2. Try custom calibration file /opt/diplay/touch_calib.json
 	if data, err := os.ReadFile(CalibFilePath); err == nil {
 		var c CalibrationData
 		if err := json.Unmarshal(data, &c); err == nil && c.Valid {
 			im.Calib = c
-			log.Printf("[Input] Loaded calibration from %s", CalibFilePath)
+			log.Printf("[Input] Loaded user calibration from %s", CalibFilePath)
 			return
 		}
 	}
-	im.Calib.Valid = false
+
+	// 3. Fallback to Official GoodTFT LCD-show 3.5" (rotate=90) Golden Calibration
+	// Official specification: Option "Calibration" "3936 227 268 3880", Option "SwapAxes" "1"
+	// Screen X = (rawY - 268) * 480 / (3880 - 268) = 0.13289*rawY - 35.6146
+	// Screen Y = (3936 - rawX) * 320 / (3936 - 227) = -0.08627*rawX + 339.5632
+	im.Calib = CalibrationData{
+		A:     0.0,
+		B:     480.0 / (3880.0 - 268.0),
+		C:     -268.0 * 480.0 / (3880.0 - 268.0),
+		D:     -320.0 / (3936.0 - 227.0),
+		E:     0.0,
+		F:     3936.0 * 320.0 / (3936.0 - 227.0),
+		Valid: true,
+	}
+	log.Printf("[Input] Loaded factory golden calibration for 3.5\" rotate=90 (A=%.5f, B=%.5f, C=%.2f, D=%.5f, E=%.5f, F=%.2f)",
+		im.Calib.A, im.Calib.B, im.Calib.C, im.Calib.D, im.Calib.E, im.Calib.F)
+}
+
+func (im *InputManager) ApplyTemporaryCalibration(c CalibrationData) {
+	c.Valid = true
+	im.mu.Lock()
+	im.Calib = c
+	im.hasFilterState = false
+	im.mu.Unlock()
 }
 
 func (im *InputManager) SaveCalibration(c CalibrationData) {
 	c.Valid = true
 	im.mu.Lock()
 	im.Calib = c
+	im.hasFilterState = false
 	im.mu.Unlock()
 
 	data, _ := json.MarshalIndent(c, "", "  ")
@@ -120,13 +175,14 @@ func (im *InputManager) Close() {
 }
 
 func (im *InputManager) watchdogReleaseLoop() {
-	ticker := time.NewTicker(80 * time.Millisecond)
+	ticker := time.NewTicker(60 * time.Millisecond)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		im.mu.Lock()
-		if im.isPressed && time.Since(im.lastTouchTime) > 250*time.Millisecond {
+		if im.isPressed && time.Since(im.lastTouchTime) > 180*time.Millisecond {
 			im.isPressed = false
+			im.hasFilterState = false
 			evt := TouchEvent{
 				X:        im.curX,
 				Y:        im.curY,
@@ -178,6 +234,7 @@ func (im *InputManager) readTouchLoop() {
 				} else if im.pressure == 0 {
 					if im.isPressed {
 						im.isPressed = false
+						im.hasFilterState = false
 						evt := TouchEvent{
 							X:        im.curX,
 							Y:        im.curY,
@@ -204,6 +261,7 @@ func (im *InputManager) readTouchLoop() {
 				} else {
 					if im.isPressed {
 						im.isPressed = false
+						im.hasFilterState = false
 						evt := TouchEvent{
 							X:        im.curX,
 							Y:        im.curY,
@@ -228,63 +286,43 @@ func (im *InputManager) readTouchLoop() {
 				im.lastTouchTime = time.Now()
 				im.isPressed = true
 
-				var sx, sy int
+				// 过滤未接触或未按紧时的假零跳变噪点
+				if im.rawX < 120 || im.rawY < 120 {
+					im.mu.Unlock()
+					continue
+				}
 
-				if im.Calib.Valid {
-					// Standard affine transformation
-					fx := im.Calib.A*float64(im.rawX) + im.Calib.B*float64(im.rawY) + im.Calib.C
-					fy := im.Calib.D*float64(im.rawX) + im.Calib.E*float64(im.rawY) + im.Calib.F
-					sx = int(fx)
-					sy = int(fy)
+				// 应用仿射校准
+				fx := im.Calib.A*float64(im.rawX) + im.Calib.B*float64(im.rawY) + im.Calib.C
+				fy := im.Calib.D*float64(im.rawX) + im.Calib.E*float64(im.rawY) + im.Calib.F
+				rawSX := int(fx)
+				rawSY := int(fy)
+
+				if rawSX < 0 {
+					rawSX = 0
+				}
+				if rawSX >= ScreenWidth {
+					rawSX = ScreenWidth - 1
+				}
+				if rawSY < 0 {
+					rawSY = 0
+				}
+				if rawSY >= ScreenHeight {
+					rawSY = ScreenHeight - 1
+				}
+
+				// 指数加权移动平均滤波 (EMA Dejitter Filter)，去除电阻屏微小抖动
+				if !im.hasFilterState {
+					im.filterX = float64(rawSX)
+					im.filterY = float64(rawSY)
+					im.hasFilterState = true
 				} else {
-					// Fallback bounding box map
-					rx := im.rawX
-					ry := im.rawY
-
-					if rx < 150 {
-						rx = 150
-					}
-					if rx > 3950 {
-						rx = 3950
-					}
-					if ry < 150 {
-						ry = 150
-					}
-					if ry > 3950 {
-						ry = 3950
-					}
-
-					normX := (rx - 150) * 1000 / 3800
-					normY := (ry - 150) * 1000 / 3800
-
-					if im.swapXY {
-						sx = normY * ScreenWidth / 1000
-						sy = normX * ScreenHeight / 1000
-					} else {
-						sx = normX * ScreenWidth / 1000
-						sy = normY * ScreenHeight / 1000
-					}
-
-					if im.invX {
-						sx = ScreenWidth - 1 - sx
-					}
-					if im.invY {
-						sy = ScreenHeight - 1 - sy
-					}
+					im.filterX = 0.35*im.filterX + 0.65*float64(rawSX)
+					im.filterY = 0.35*im.filterY + 0.65*float64(rawSY)
 				}
 
-				if sx < 0 {
-					sx = 0
-				}
-				if sx >= ScreenWidth {
-					sx = ScreenWidth - 1
-				}
-				if sy < 0 {
-					sy = 0
-				}
-				if sy >= ScreenHeight {
-					sy = ScreenHeight - 1
-				}
+				sx := int(im.filterX + 0.5)
+				sy := int(im.filterY + 0.5)
 
 				im.curX = sx
 				im.curY = sy
