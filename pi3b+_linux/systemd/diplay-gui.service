@@ -1,0 +1,17 @@
+[Unit]
+Description=DiPlay-Pi 3.5-inch Car Touch GUI Dashboard
+After=network.target diplay-pi.service
+Wants=diplay-pi.service diplay-bt.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/diplay
+ExecStart=/opt/diplay/bin/diplay-gui -fb /dev/fb1 -touch /dev/input/event4 -mouse /dev/input/mice
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=DiPlay-Pi Bluetooth Auto-Accept Pairing Agent
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /opt/diplay/scripts/bt_agent.py
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
