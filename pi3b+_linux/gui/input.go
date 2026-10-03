@@ -6,11 +6,14 @@ import (
 	"log"
 	"os"
 	"sync"
+	"time"
 )
 
 type TouchEvent struct {
 	X        int
 	Y        int
+	RawX     int
+	RawY     int
 	Pressed  bool
 	Released bool
 }
@@ -22,51 +25,42 @@ type InputManager struct {
 	Events       chan TouchEvent
 	rawX         int
 	rawY         int
+	pressure     int
 	curX         int
 	curY         int
 	isPressed    bool
 	swapXY       bool
 	invX         bool
 	invY         bool
-	cursorVisible bool
+	lastTouchTime time.Time
 }
 
 func NewInputManager(touchPath, mousePath string) *InputManager {
 	im := &InputManager{
-		Events: make(chan TouchEvent, 32),
+		Events: make(chan TouchEvent, 64),
 		curX:   ScreenWidth / 2,
 		curY:   ScreenHeight / 2,
-		swapXY: true,  // ADS7846 on 90deg rotated TFT
+		// Standard calibration for Waveshare / TFT35a 3.5-inch with rotate=90
+		swapXY: true,
 		invX:   false,
 		invY:   true,
 	}
 
 	// Try open touch device
 	if touchPath == "" {
-		candidates := []string{
-			"/dev/input/event4",
-			"/dev/input/by-path/platform-3f204000.spi-cs-1-event",
-			"/dev/input/event3",
-			"/dev/input/event2",
-		}
-		for _, p := range candidates {
-			if f, err := os.OpenFile(p, os.O_RDONLY, 0); err == nil {
-				touchPath = p
-				f.Close()
-				break
-			}
-		}
+		touchPath = "/dev/input/event4"
 	}
 
 	if f, err := os.OpenFile(touchPath, os.O_RDONLY, 0); err == nil {
 		im.touchDev = f
 		go im.readTouchLoop()
+		go im.watchdogReleaseLoop()
 		log.Printf("[Input] Touchscreen opened: %s", touchPath)
 	} else {
 		log.Printf("[Input] Touchscreen not opened: %v", err)
 	}
 
-	// Try open mouse device for fallback USB mouse
+	// Fallback mouse device (/dev/input/mice)
 	if mousePath == "" {
 		mousePath = "/dev/input/mice"
 	}
@@ -88,18 +82,38 @@ func (im *InputManager) Close() {
 	}
 }
 
+// watchdogReleaseLoop auto-releases touch if no events for 250ms (crucial for resistive screens)
+func (im *InputManager) watchdogReleaseLoop() {
+	ticker := time.NewTicker(80 * time.Millisecond)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		im.mu.Lock()
+		if im.isPressed && time.Since(im.lastTouchTime) > 250*time.Millisecond {
+			im.isPressed = false
+			evt := TouchEvent{
+				X:        im.curX,
+				Y:        im.curY,
+				RawX:     im.rawX,
+				RawY:     im.rawY,
+				Pressed:  false,
+				Released: true,
+			}
+			im.mu.Unlock()
+			select {
+			case im.Events <- evt:
+			default:
+			}
+		} else {
+			im.mu.Unlock()
+		}
+	}
+}
+
 // readTouchLoop parses Linux evdev input_event
 func (im *InputManager) readTouchLoop() {
-	// struct input_event for 64-bit ARM Linux:
-	// timeval: 16 bytes (sec 8B, usec 8B)
-	// type:    2 bytes
-	// code:    2 bytes
-	// value:   4 bytes
-	// total = 24 bytes
 	buf := make([]byte, 24)
-
-	var lastX, lastY int
-	hasMoved := false
+	hasCoordUpdate := false
 
 	for {
 		_, err := io.ReadFull(im.touchDev, buf)
@@ -112,37 +126,78 @@ func (im *InputManager) readTouchLoop() {
 		evCode := binary.LittleEndian.Uint16(buf[18:20])
 		evVal := int32(binary.LittleEndian.Uint32(buf[20:24]))
 
+		im.mu.Lock()
+
 		switch evType {
 		case 3: // EV_ABS
 			if evCode == 0 { // ABS_X
 				im.rawX = int(evVal)
-				hasMoved = true
+				hasCoordUpdate = true
 			} else if evCode == 1 { // ABS_Y
 				im.rawY = int(evVal)
-				hasMoved = true
+				hasCoordUpdate = true
+			} else if evCode == 24 { // ABS_PRESSURE
+				im.pressure = int(evVal)
+				if im.pressure > 30 {
+					im.isPressed = true
+					im.lastTouchTime = time.Now()
+				} else if im.pressure == 0 {
+					if im.isPressed {
+						im.isPressed = false
+						evt := TouchEvent{
+							X:        im.curX,
+							Y:        im.curY,
+							RawX:     im.rawX,
+							RawY:     im.rawY,
+							Pressed:  false,
+							Released: true,
+						}
+						im.mu.Unlock()
+						select {
+						case im.Events <- evt:
+						default:
+						}
+						im.mu.Lock()
+					}
+				}
 			}
+
 		case 1: // EV_KEY
 			if evCode == 330 { // BTN_TOUCH
 				if evVal == 1 {
 					im.isPressed = true
+					im.lastTouchTime = time.Now()
 				} else {
-					im.isPressed = false
-					// Touch Released
-					im.Events <- TouchEvent{
-						X:        im.curX,
-						Y:        im.curY,
-						Pressed:  false,
-						Released: true,
+					if im.isPressed {
+						im.isPressed = false
+						evt := TouchEvent{
+							X:        im.curX,
+							Y:        im.curY,
+							RawX:     im.rawX,
+							RawY:     im.rawY,
+							Pressed:  false,
+							Released: true,
+						}
+						im.mu.Unlock()
+						select {
+						case im.Events <- evt:
+						default:
+						}
+						im.mu.Lock()
 					}
 				}
 			}
+
 		case 0: // EV_SYN
-			if hasMoved && im.isPressed {
-				// Map raw coords (200~3900) to 480x320
+			if hasCoordUpdate {
+				hasCoordUpdate = false
+				im.lastTouchTime = time.Now()
+				im.isPressed = true
+
+				// Map raw ADS7846 coords (150 ~ 3950) to 480x320
 				rx := im.rawX
 				ry := im.rawY
 
-				// Clamp
 				if rx < 150 {
 					rx = 150
 				}
@@ -175,21 +230,40 @@ func (im *InputManager) readTouchLoop() {
 					sy = ScreenHeight - 1 - sy
 				}
 
+				// Clamp screen coords
+				if sx < 0 {
+					sx = 0
+				}
+				if sx >= ScreenWidth {
+					sx = ScreenWidth - 1
+				}
+				if sy < 0 {
+					sy = 0
+				}
+				if sy >= ScreenHeight {
+					sy = ScreenHeight - 1
+				}
+
 				im.curX = sx
 				im.curY = sy
 
-				if im.curX != lastX || im.curY != lastY {
-					lastX = im.curX
-					lastY = im.curY
-					im.Events <- TouchEvent{
-						X:       im.curX,
-						Y:       im.curY,
-						Pressed: true,
-					}
+				evt := TouchEvent{
+					X:       im.curX,
+					Y:       im.curY,
+					RawX:    im.rawX,
+					RawY:    im.rawY,
+					Pressed: true,
 				}
-				hasMoved = false
+				im.mu.Unlock()
+				select {
+				case im.Events <- evt:
+				default:
+				}
+				im.mu.Lock()
 			}
 		}
+
+		im.mu.Unlock()
 	}
 }
 
@@ -210,8 +284,9 @@ func (im *InputManager) readMouseLoop() {
 
 		isLeftDown := (b0 & 0x01) != 0
 
+		im.mu.Lock()
 		im.curX += dx
-		im.curY -= dy // mouse y is inverted
+		im.curY -= dy
 
 		if im.curX < 0 {
 			im.curX = 0
@@ -226,20 +301,22 @@ func (im *InputManager) readMouseLoop() {
 			im.curY = ScreenHeight - 1
 		}
 
-		im.cursorVisible = true
+		cx := im.curX
+		cy := im.curY
+		im.mu.Unlock()
 
 		if isLeftDown && !wasLeftDown {
 			wasLeftDown = true
 			im.Events <- TouchEvent{
-				X:       im.curX,
-				Y:       im.curY,
+				X:       cx,
+				Y:       cy,
 				Pressed: true,
 			}
 		} else if !isLeftDown && wasLeftDown {
 			wasLeftDown = false
 			im.Events <- TouchEvent{
-				X:        im.curX,
-				Y:        im.curY,
+				X:        cx,
+				Y:        cy,
 				Pressed:  false,
 				Released: true,
 			}

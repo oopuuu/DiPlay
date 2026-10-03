@@ -294,17 +294,18 @@ func (m *Manager) SetBanner(msg string) {
 }
 
 func (m *Manager) MakeDiscoverable() {
-	m.SetBanner("Activating Beacon: Search 'Tesla-CarPlay' on iPhone")
+	m.SetBanner("正在开启蓝牙广播...")
 	go func() {
 		_ = exec.Command("bluetoothctl", "system-alias", "Tesla-CarPlay").Run()
 		_ = exec.Command("bluetoothctl", "discoverable", "on").Run()
 		_ = exec.Command("bluetoothctl", "pairable", "on").Run()
 		m.refreshBluetooth()
+		m.SetBanner("蓝牙广播中: 请在手机搜索连接")
 	}()
 }
 
 func (m *Manager) ScanNearbyDevices() {
-	m.SetBanner("Scanning nearby Bluetooth devices (8s)...")
+	m.SetBanner("正在扫描附近蓝牙设备...")
 	go func() {
 		cmd := exec.Command("bluetoothctl", "scan", "on")
 		_ = cmd.Start()
@@ -313,12 +314,12 @@ func (m *Manager) ScanNearbyDevices() {
 			_ = cmd.Process.Kill()
 		}
 		m.refreshBluetooth()
-		m.SetBanner("Scan complete! Check list")
+		m.SetBanner("扫描完成")
 	}()
 }
 
 func (m *Manager) ResetBluetooth() {
-	m.SetBanner("Resetting Bluetooth controller...")
+	m.SetBanner("正在重置蓝牙控制器...")
 	go func() {
 		_ = exec.Command("sudo", "systemctl", "restart", "bluetooth").Run()
 		time.Sleep(2 * time.Second)
@@ -327,41 +328,41 @@ func (m *Manager) ResetBluetooth() {
 		_ = exec.Command("bluetoothctl", "pairable", "on").Run()
 		_ = exec.Command("bluetoothctl", "system-alias", "Tesla-CarPlay").Run()
 		m.refreshBluetooth()
-		m.SetBanner("Bluetooth Ready: Discoverable ON")
+		m.SetBanner("蓝牙控制器已就绪")
 	}()
 }
 
 func (m *Manager) SwitchToCarHotspot() {
-	m.SetBanner("Switching to Tesla Hotspot (192.168.43.1)...")
+	m.SetBanner("正在开启车载热点 (Tesla-CarPlay)...")
 	go func() {
 		_ = exec.Command("sudo", "nmcli", "connection", "up", "Tesla-CarPlay").Run()
 		time.Sleep(3 * time.Second)
 		m.updateNetwork()
-		m.SetBanner("Car Hotspot Active: 192.168.43.1")
+		m.SetBanner("已开启车载热点: 192.168.43.1")
 	}()
 }
 
 func (m *Manager) SwitchToHomeWifi() {
-	m.SetBanner("Connecting to Home Wi-Fi (Xiaomi_1803)...")
+	m.SetBanner("正在连接家庭网络 (Xiaomi_1803)...")
 	go func() {
 		_ = exec.Command("sudo", "nmcli", "connection", "up", "Xiaomi_1803").Run()
 		time.Sleep(3 * time.Second)
 		m.updateNetwork()
-		m.SetBanner("Connected to Home Wi-Fi")
+		m.SetBanner("已连接家庭网络")
 	}()
 }
 
 func (m *Manager) RestartDiPlayService() {
-	m.SetBanner("Restarting DiPlay Web Streamer...")
+	m.SetBanner("正在重启投屏服务...")
 	go func() {
 		_ = exec.Command("sudo", "systemctl", "restart", "diplay-pi").Run()
 		time.Sleep(1 * time.Second)
-		m.SetBanner("DiPlay Streamer Restarted")
+		m.SetBanner("投屏服务已重启")
 	}()
 }
 
 func (m *Manager) RebootPi() {
-	m.SetBanner("Rebooting system in 2s...")
+	m.SetBanner("系统即将在 2 秒后重启...")
 	go func() {
 		time.Sleep(2 * time.Second)
 		_ = exec.Command("sudo", "reboot").Run()
