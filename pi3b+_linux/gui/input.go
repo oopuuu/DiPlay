@@ -128,17 +128,14 @@ func (im *InputManager) LoadCalibration() {
 		}
 	}
 
-	// 3. Fallback to Official GoodTFT LCD-show 3.5" (rotate=90) Golden Calibration
-	// Official specification with correct physical orientation:
-	// Screen X = (rawY - 268) * 480 / (3880 - 268) = 0.13289*rawY - 35.6146
-	// Screen Y = (rawX - 227) * 320 / (3936 - 227) =  0.08627*rawX - 19.5843
+	// 3. Fallback to Physically Calibrated Golden Matrix:
 	im.Calib = CalibrationData{
-		A:     0.0,
-		B:     480.0 / (3880.0 - 268.0),
-		C:     -268.0 * 480.0 / (3880.0 - 268.0),
-		D:     320.0 / (3936.0 - 227.0),
-		E:     0.0,
-		F:     -227.0 * 320.0 / (3936.0 - 227.0),
+		A:     -0.0242685,
+		B:     -0.4264016,
+		C:     560.60476,
+		D:     0.2453592,
+		E:     -0.0043173,
+		F:     23.49689,
 		Valid: true,
 	}
 	log.Printf("[Input] Loaded factory golden calibration for 3.5\" rotate=90 (A=%.5f, B=%.5f, C=%.2f, D=%.5f, E=%.5f, F=%.2f)",
@@ -287,7 +284,7 @@ func (im *InputManager) readTouchLoop() {
 				im.isPressed = true
 
 				// 过滤未接触或未按紧时的假零跳变噪点
-				if im.rawX < 120 || im.rawY < 120 {
+				if im.rawX < 20 || im.rawY < 20 {
 					im.mu.Unlock()
 					continue
 				}
@@ -326,6 +323,8 @@ func (im *InputManager) readTouchLoop() {
 
 				im.curX = sx
 				im.curY = sy
+
+				log.Printf("[Touch] Raw=(%d, %d) -> Screen=(%d, %d)", im.rawX, im.rawY, im.curX, im.curY)
 
 				evt := TouchEvent{
 					X:       im.curX,
