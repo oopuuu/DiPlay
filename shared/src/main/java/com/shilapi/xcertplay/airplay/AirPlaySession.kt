@@ -160,8 +160,7 @@ class AirPlaySession(
             output.flush()
             true
         } catch (error: Exception) {
-            Log.w(TAG, "airplay event command failed type=${command["type"]}", error)
-            close()
+            Log.w(TAG, "airplay event command failed type=${command["type"]}: $error")
             false
         }
     }
@@ -626,6 +625,7 @@ class AirPlaySession(
     private fun acceptEvent(server: ServerSocket) {
         try {
             val socket = server.accept()
+            socket.tcpNoDelay = true
             socket.setSoLinger(true, 0)
             debugLog("airplay event connection accepted from ${socket.remoteSocketAddress}")
             eventSocket = socket

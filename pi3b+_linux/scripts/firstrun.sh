@@ -16,7 +16,7 @@ cp -r "$BOOT_DIR/diplay/bin/diplay-pi" /opt/diplay/bin/diplay-pi 2>/dev/null || 
 cp -r "$BOOT_DIR/diplay/web" /opt/diplay/ 2>/dev/null || true
 chmod +x /opt/diplay/bin/diplay-pi 2>/dev/null || true
 
-# 3. Create NetworkManager Hotspot connection (Tesla-CarPlay on 192.168.43.1)
+# 3. Create NetworkManager Hotspot connection (Tesla-CarPlay on 100.96.0.1 - RFC 6598)
 mkdir -p /etc/NetworkManager/system-connections
 cat <<'EOF' > /etc/NetworkManager/system-connections/Tesla-CarPlay.nmconnection
 [connection]
@@ -27,6 +27,8 @@ interface-name=wlan0
 autoconnect=true
 
 [wifi]
+band=a
+channel=149
 mode=ap
 ssid=Tesla-CarPlay
 
@@ -35,7 +37,7 @@ key-mgmt=wpa-psk
 psk=diplay123456
 
 [ipv4]
-address1=192.168.43.1/24
+address1=100.96.0.1/24
 method=shared
 
 [ipv6]

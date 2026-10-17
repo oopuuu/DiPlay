@@ -71,6 +71,34 @@ object AirPlayCrypto {
         return output
     }
 
+    private var nativeLoaded = false
+
+    init {
+        try {
+            System.loadLibrary("airplay_crypto")
+            nativeLoaded = true
+            println("[AirPlayCrypto] >>> SUCCESS: Native C/OpenSSL ARMv8 NEON Acceleration Enabled (libairplay_crypto.so) <<<")
+        } catch (e: Throwable) {
+            println("[AirPlayCrypto] Native C crypto library not loaded ($e), running Java software fallback")
+        }
+    }
+
+    @JvmStatic
+    private external fun nativeChachaOpen(
+        key: ByteArray,
+        nonce: ByteArray,
+        ciphertextAndTag: ByteArray,
+        aad: ByteArray,
+    ): ByteArray?
+
+    @JvmStatic
+    private external fun nativeChachaSeal(
+        key: ByteArray,
+        nonce: ByteArray,
+        plaintext: ByteArray,
+        aad: ByteArray,
+    ): ByteArray?
+
     fun sha512(vararg parts: ByteArray): ByteArray = digest(SHA512Digest(), parts)
 
     fun chachaSeal(
@@ -79,6 +107,10 @@ object AirPlayCrypto {
         plaintext: ByteArray,
         aad: ByteArray = ByteArray(0),
     ): ByteArray {
+        if (nativeLoaded) {
+            val result = nativeChachaSeal(key, nonce, plaintext, aad)
+            if (result != null) return result
+        }
         val cipher = ChaCha20Poly1305()
         cipher.init(true, AEADParameters(KeyParameter(key), MAC_BITS, nonce, aad))
         val output = ByteArray(cipher.getOutputSize(plaintext.size))
@@ -93,6 +125,10 @@ object AirPlayCrypto {
         ciphertextAndTag: ByteArray,
         aad: ByteArray = ByteArray(0),
     ): ByteArray {
+        if (nativeLoaded) {
+            val result = nativeChachaOpen(key, nonce, ciphertextAndTag, aad)
+            if (result != null) return result
+        }
         val cipher = ChaCha20Poly1305()
         cipher.init(false, AEADParameters(KeyParameter(key), MAC_BITS, nonce, aad))
         val output = ByteArray(cipher.getOutputSize(ciphertextAndTag.size))

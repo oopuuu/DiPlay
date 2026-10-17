@@ -24,58 +24,63 @@ apt-get install -y hostapd dnsmasq iptables iptables-persistent
 systemctl stop hostapd 2>/dev/null || true
 systemctl stop dnsmasq 2>/dev/null || true
 
-# 1. Configure Static IP on wlan0 (192.168.43.1 standard vehicle gateway)
-echo "[+] Configuring static IP 192.168.43.1 for wlan0..."
-if ! grep -q "interface wlan0" /etc/dhcpcd.conf 2>/dev/null; then
+# 1. Configure Static IP on wlan0 (100.96.0.1 - RFC 6598 Carrier-Grade NAT to bypass Tesla browser LAN restrictions)
+echo "[+] Configuring static IP 100.96.0.1 for wlan0..."
+# Clean any old 192.168.43.1 configuration from dhcpcd.conf
+sed -i '/192\.168\.43\./d' /etc/dhcpcd.conf 2>/dev/null || true
+if ! grep -q "100.96.0.1" /etc/dhcpcd.conf 2>/dev/null; then
 cat <<EOF >> /etc/dhcpcd.conf
 
-# DiPlay-Pi Hotspot Static IP
+# DiPlay-Pi Hotspot Static IP (Tesla-Compatible 100.96.0.1)
 interface wlan0
-    static ip_address=192.168.43.1/24
+    static ip_address=100.96.0.1/24
     nohook wpa_supplicant
 EOF
 fi
 
-# 2. Configure dnsmasq: DHCP server + Tesla Fake-204 Captive Portal DNS Hijack
-echo "[+] Configuring dnsmasq DHCP & Tesla captive portal spoofing..."
+# 2. Configure dnsmasq: DHCP server + DNS spoofing for Tesla browser
+echo "[+] Configuring dnsmasq DHCP & DNS..."
 mv /etc/dnsmasq.conf /etc/dnsmasq.conf.bak 2>/dev/null || true
 cat <<EOF > /etc/dnsmasq.conf
-# DiPlay-Pi DNS & DHCP Configuration
+# DiPlay-Pi DNS & DHCP Configuration (Tesla-Optimized)
 interface=wlan0
-dhcp-range=192.168.43.50,192.168.43.150,255.255.255.0,24h
-dhcp-option=3,192.168.43.1
-dhcp-option=6,192.168.43.1
+dhcp-range=100.96.0.50,100.96.0.150,255.255.255.0,24h
+
+# IMPORTANT: Do NOT send DHCP Option 3 (Router/Gateway)!
+# Without a default gateway, Tesla treats this Wi-Fi as a Link-Local LAN
+# and keeps using its built-in 4G/LTE for Internet/Mothership communication.
+# dhcp-option=3,100.96.0.1 (INTENTIONALLY OMITTED)
+
+# Push Pi as DNS server for local names
+dhcp-option=6,100.96.0.1
 
 # Friendly custom domains for Tesla browser
-address=/tesla/192.168.43.1
-address=/carplay/192.168.43.1
-address=/tesla.carplay/192.168.43.1
-address=/diplay.com/192.168.43.1
-address=/tespush.com/192.168.43.1
+address=/carplay/100.96.0.1
+address=/tesla.carplay/100.96.0.1
+address=/diplay.com/100.96.0.1
+address=/tespush.com/100.96.0.1
+address=/dashplay.lan/100.96.0.1
 
-# Hijack Tesla & Android/Apple connectivity check domains to local fake-204 server
-address=/clients3.google.com/192.168.43.1
-address=/connectivitycheck.gstatic.com/192.168.43.1
-address=/connectivitycheck.android.com/192.168.43.1
-address=/play.googleapis.com/192.168.43.1
-address=/captive.apple.com/192.168.43.1
-address=/detectportal.firefox.com/192.168.43.1
-address=/cp.cloudflare.com/192.168.43.1
-address=/vn.teslamotors.com/192.168.43.1
-address=/mothership.teslamotors.com/192.168.43.1
-address=/tesla.com/192.168.43.1
+# Standard HTTP (Port 80) Captive Portal & Connectivity Check domains (Fake-204)
+address=/clients3.google.com/100.96.0.1
+address=/connectivitycheck.gstatic.com/100.96.0.1
+address=/connectivitycheck.android.com/100.96.0.1
+address=/play.googleapis.com/100.96.0.1
+address=/captive.apple.com/100.96.0.1
+address=/detectportal.firefox.com/100.96.0.1
+address=/cp.cloudflare.com/100.96.0.1
 EOF
 
 # 3. Configure hostapd based on chosen band (2.4GHz or 5GHz)
 echo "[+] Configuring hostapd Wi-Fi Hotspot (SSID: Tesla-CarPlay)..."
 if [ "$BAND_ARG" = "5g" ]; then
-  echo "    Mode: 802.11a/n/ac 5GHz (Channel 36)"
+  echo "    Mode: 802.11a/n/ac 5GHz (Channel 149, Tesla 149-165)"
   cat <<EOF > /etc/hostapd/hostapd.conf
 interface=wlan0
 driver=nl80211
 ssid=Tesla-CarPlay
 hw_mode=a
-channel=36
+channel=149
 ieee80211n=1
 ieee80211ac=1
 wmm_enabled=1
@@ -153,7 +158,7 @@ echo "  [✓] Tesla-Compatible Hotspot successfully started!"
 echo "  SSID:       Tesla-CarPlay"
 echo "  Password:   diplay123456"
 echo "  Band:       $BAND_ARG"
-echo "  Car URL:    http://192.168.43.1 (or http://diplay.com)"
+echo "  Car URL:    http://100.96.0.1 (or http://carplay, http://tesla.carplay)"
 echo "  Fake-204:   Enabled (Tesla internet check bypassed)"
 echo "  USB Tether: Auto-forwarded if iPhone connected via USB cable"
 echo "=========================================================================="

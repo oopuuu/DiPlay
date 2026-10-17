@@ -158,23 +158,26 @@ cd /home/pi/pi3b+_linux
 # 选项 1：2.4GHz 全兼容模式（推荐首次部署使用，兼容所有批次特斯拉车机）
 sudo bash scripts/setup_ap_hotspot.sh 2.4g
 
-# 选项 2：5GHz 极速模式（Channel 36，适合支持 5G 的新款特斯拉车机）
+# 选项 1：5GHz 极速模式（Channel 149，中国特斯拉车机最佳兼容频段，推荐）
 sudo bash scripts/setup_ap_hotspot.sh 5g
+
+# 选项 2：2.4GHz 兼容模式（Channel 6，通用兼容）
+sudo bash scripts/setup_ap_hotspot.sh 2.4g
 ```
 
 **热点及网络自动化特性**：
 - **SSID（热点名）**：`Tesla-CarPlay`
 - **密码**：`diplay123456`
-- **树莓派固定 IP**：`192.168.43.1`
-- **【核心突破】特斯拉连通性检测欺骗（Fake-204）**：
-  - 自动通过 `dnsmasq` 拦截特斯拉发出的连通性探测请求（`clients3.google.com`, `connectivitycheck.gstatic.com`, `captive.apple.com`, `vn.teslamotors.com` 等）；
-  - 服务端统一返回 **`HTTP/1.1 204 No Content`**；
-  - **彻底解决特斯拉车机提示“无法访问互联网 / 请检查防火墙设置”并自动断开 Wi-Fi 的顽疾**！
-- **【80 端口直通】**：已配置 iptables 将 80 端口重定向至 8088 端口，车机在浏览器中**无需手动输入 `:8088`**。
-- **【双模网络：iPhone USB 有线共享】**：
+- **树莓派车载固定 IP**：`100.96.0.1`（RFC 6598 运营商级共享地址 CGNAT，彻底绕过特斯拉浏览器对 RFC 1918 `192.168.x.x` 局域网地址的强行拦截）
+- **【核心突破一】不抢占默认网关（未下发 DHCP Option 3）**：
+  - 树莓派 DHCP 仅分配子网 IP，**绝不下发 Option 3 默认路由器网关**；
+  - 特斯拉车机系统发现该 Wi-Fi 属于本地链路设备，其核心系统默认路由依然走车身自带的 **4G/LTE 蜂窝网络**（Spotify、在线导航、哨兵、特斯拉官方母舰 mTLS 通信均保持畅通）；
+  - 特斯拉永远不会报“无法访问互联网，请检查防火墙设置”，Wi-Fi 状态保持秒级稳定。
+- **【核心突破二】80 端口直通**：
+  - 已配置 iptables 将 80 端口直接重定向至 8088 端口，车机在浏览器中**无需手动输入 `:8088`**。
+- **【双模网络：iPhone USB 有线共享（可选）】**：
   - 脚本已内置 iptables NAT 转发规则；
-  - 若将 iPhone 用 Lightning/Type-C 数据线插入树莓派 USB 口，并在 iPhone 开启“个人热点（仅 USB）”，树莓派会自动将 iPhone 的 5G 高速网络通过 Wi-Fi 共享给特斯拉；
-  - 特斯拉不仅可以投屏，还能同时真正访问公网，自带的高德地图、网易云音乐、QQ音乐全部正常联网！
+  - 若将 iPhone 用数据线插入树莓派 USB 口，并在 iPhone 开启“个人热点（仅 USB）”，树莓派会自动将 iPhone 的网络转发给车机。
 
 ---
 
@@ -188,12 +191,14 @@ sudo bash scripts/setup_ap_hotspot.sh 5g
 
 ### 2. 打开车机浏览器访问
 1. 打开车机自带的 **浏览器 (Browser)**。
-2. 在地址栏输入并收藏下列任意一个直达地址：
+2. 在地址栏输入并收藏下列直达地址：
    ```text
-   http://192.168.43.1
+   http://100.96.0.1
    ```
    或使用友好域名（已内置 DNS 解析）：
    ```text
+   http://carplay
+   http://tesla.carplay
    http://diplay.com
    ```
    *(注：无需加 `:8088`，已做 80 端口自动重定向)*

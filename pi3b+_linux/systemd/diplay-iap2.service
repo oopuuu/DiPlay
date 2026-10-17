@@ -1,0 +1,19 @@
+[Unit]
+Description=DiPlay-Pi Wireless CarPlay iAP2 Bootstrap Daemon
+After=bluetooth.target diplay-bt.service
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/diplay
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -u /opt/diplay/scripts/iap2_bootstrap.py
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

@@ -1,14 +1,17 @@
 [Unit]
 Description=DiPlay-Pi Tesla CarPlay Web Remote Streaming Service
-After=network.target hostapd.service
+After=NetworkManager.service network.target diplay-hotspot.service
+Wants=diplay-hotspot.service
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/opt/diplay
+ExecStartPre=/bin/bash /opt/diplay/scripts/ensure_hotspot.sh
 ExecStart=/opt/diplay/diplay-pi -port 8088
 Restart=always
 RestartSec=3
+
 LimitNOFILE=65535
 
 [Install]

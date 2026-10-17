@@ -26,6 +26,7 @@ class Iap2WirelessControlClient(
         timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
         locationProvider: Iap2LocationProvider? = null,
         vehicleStatusProvider: VehicleStatusProvider? = null,
+        isTunnel: Boolean = false,
         onReady: () -> Unit = {},
         onIncoming: (Iap2Frame) -> Unit = {},
         onProgress: (String) -> Unit = {},
@@ -129,47 +130,55 @@ class Iap2WirelessControlClient(
                 when (incoming.messageId) {
                     REQUEST_ACCESSORY_WIFI_CONFIGURATION -> {
                         onProgress("iap2 rx=0x5702 request-wifi-configuration")
-                        val postTransport = transportNotificationSeen
-                        val sentCount = if (postTransport) {
-                            postTransportWiFiConfigurationsSent
-                        } else {
-                            preTransportWiFiConfigurationsSent
-                        }
-                        val limit = if (postTransport) {
-                            MAX_POST_TRANSPORT_WIFI_CONFIGURATION_SENDS
-                        } else {
-                            MAX_PRE_TRANSPORT_WIFI_CONFIGURATION_SENDS
-                        }
-                        if (sentCount >= limit) {
-                            onProgress(
-                                "iap2 0x5703 ignored: maximum Wi-Fi configuration sends reached",
-                            )
-                        } else {
-                            send(accessoryWiFiConfiguration(endpoint), deadlineNanos)
-                            stage = later(
-                                stage,
-                                if (postTransport) {
-                                    Iap2WirelessControlStage.POST_TRANSPORT_WIFI_CONFIG_SENT
-                                } else {
-                                    Iap2WirelessControlStage.WIFI_CONFIG_SENT
-                                },
-                            )
-                            wifiConfigurationsSent++
-                            if (postTransport) {
-                                postTransportWiFiConfigurationsSent++
+                        if (!isTunnel) {
+                            val postTransport = transportNotificationSeen
+                            val sentCount = if (postTransport) {
+                                postTransportWiFiConfigurationsSent
                             } else {
-                                preTransportWiFiConfigurationsSent++
+                                preTransportWiFiConfigurationsSent
                             }
-                            onProgress("iap2 tx=0x5703 accessory-wifi-configuration")
+                            val limit = if (postTransport) {
+                                MAX_POST_TRANSPORT_WIFI_CONFIGURATION_SENDS
+                            } else {
+                                MAX_PRE_TRANSPORT_WIFI_CONFIGURATION_SENDS
+                            }
+                            if (sentCount >= limit) {
+                                onProgress(
+                                    "iap2 0x5703 ignored: maximum Wi-Fi configuration sends reached",
+                                )
+                            } else {
+                                send(accessoryWiFiConfiguration(endpoint), deadlineNanos)
+                                stage = later(
+                                    stage,
+                                    if (postTransport) {
+                                        Iap2WirelessControlStage.POST_TRANSPORT_WIFI_CONFIG_SENT
+                                    } else {
+                                        Iap2WirelessControlStage.WIFI_CONFIG_SENT
+                                    },
+                                )
+                                wifiConfigurationsSent++
+                                if (postTransport) {
+                                    postTransportWiFiConfigurationsSent++
+                                } else {
+                                    preTransportWiFiConfigurationsSent++
+                                }
+                                onProgress("iap2 tx=0x5703 accessory-wifi-configuration")
+                            }
+                        } else {
+                            onProgress("iap2 rx=0x5702 in tunnel mode (ignoring, already connected via Wi-Fi)")
                         }
                     }
 
                     CARPLAY_AVAILABILITY -> {
                         onProgress("iap2 rx=0x4300 carplay-availability")
-                        send(carPlayStartSession(endpoint), deadlineNanos)
-                        stage = later(stage, Iap2WirelessControlStage.CARPLAY_START_SENT)
-                        carPlayStartSessionsSent++
-                        onProgress("iap2 tx=0x4301 carplay-start-session")
+                        if (!isTunnel) {
+                            send(carPlayStartSession(endpoint), deadlineNanos)
+                            stage = later(stage, Iap2WirelessControlStage.CARPLAY_START_SENT)
+                            carPlayStartSessionsSent++
+                            onProgress("iap2 tx=0x4301 carplay-start-session")
+                        } else {
+                            onProgress("iap2 rx=0x4300 in tunnel mode: keeping active Wi-Fi session, NOT sending 0x4301")
+                        }
                     }
 
                     WIRELESS_CARPLAY_UPDATE -> {
@@ -185,28 +194,29 @@ class Iap2WirelessControlClient(
                         onProgress(
                             "iap2 rx=0x4e0e device-transport-identifier " +
                                 "bluetooth=${identifiers.bluetoothMac ?: "none"} " +
-                                "usb=${identifiers.usbTransportIdentifier ?: "none"}; " +
-                                "resending 0x5703",
+                                "usb=${identifiers.usbTransportIdentifier ?: "none"}",
                         )
-                        if (
-                            postTransportWiFiConfigurationsSent >=
-                            MAX_POST_TRANSPORT_WIFI_CONFIGURATION_SENDS
-                        ) {
-                            onProgress(
-                                "iap2 post-transport 0x5703 ignored: " +
-                                    "maximum Wi-Fi configuration sends reached",
-                            )
-                        } else {
-                            send(accessoryWiFiConfiguration(endpoint), deadlineNanos)
-                            stage = later(
-                                stage,
-                                Iap2WirelessControlStage.POST_TRANSPORT_WIFI_CONFIG_SENT,
-                            )
-                            wifiConfigurationsSent++
-                            postTransportWiFiConfigurationsSent++
-                            onProgress(
-                                "iap2 tx=0x5703 post-transport accessory-wifi-configuration",
-                            )
+                        if (!isTunnel) {
+                            if (
+                                postTransportWiFiConfigurationsSent >=
+                                MAX_POST_TRANSPORT_WIFI_CONFIGURATION_SENDS
+                            ) {
+                                onProgress(
+                                    "iap2 post-transport 0x5703 ignored: " +
+                                        "maximum Wi-Fi configuration sends reached",
+                                )
+                            } else {
+                                send(accessoryWiFiConfiguration(endpoint), deadlineNanos)
+                                stage = later(
+                                    stage,
+                                    Iap2WirelessControlStage.POST_TRANSPORT_WIFI_CONFIG_SENT,
+                                )
+                                wifiConfigurationsSent++
+                                postTransportWiFiConfigurationsSent++
+                                onProgress(
+                                    "iap2 tx=0x5703 post-transport accessory-wifi-configuration",
+                                )
+                            }
                         }
                     }
 

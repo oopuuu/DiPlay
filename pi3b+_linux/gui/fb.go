@@ -41,11 +41,18 @@ type Framebuffer struct {
 }
 
 func NewFramebuffer(devPath string) (*Framebuffer, error) {
+	if devPath != "" {
+		if _, err := os.Stat(devPath); err != nil {
+			devPath = "" // Fallback to auto-detection
+		}
+	}
 	if devPath == "" {
 		if _, err := os.Stat("/dev/fb1"); err == nil {
 			devPath = "/dev/fb1"
-		} else {
+		} else if _, err := os.Stat("/dev/fb0"); err == nil {
 			devPath = "/dev/fb0"
+		} else {
+			return nil, fmt.Errorf("no framebuffer device (/dev/fb1 or /dev/fb0) found")
 		}
 	}
 
@@ -269,9 +276,17 @@ func (fb *Framebuffer) DrawText(x, y int, str string, color uint16, scale int) i
 	return curX - x
 }
 
-// DrawBadge renders a pill badge
+// DrawBadge renders a pill badge with accurate Chinese text width
 func (fb *Framebuffer) DrawBadge(x, y int, text string, bgColor, fgColor uint16) {
-	w := len([]rune(text))*8 + 14
+	textWidth := 0
+	for _, r := range []rune(text) {
+		if _, ok := chinese16x16[r]; ok {
+			textWidth += 16
+		} else {
+			textWidth += 8
+		}
+	}
+	w := textWidth + 14
 	h := 22
 	fb.FillRoundRect(x, y, w, h, 6, bgColor)
 	fb.DrawText(x+7, y+3, text, fgColor, 1)

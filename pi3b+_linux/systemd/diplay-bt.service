@@ -6,7 +6,7 @@ Requires=bluetooth.service
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/bin/python3 /opt/diplay/scripts/bt_agent.py
+ExecStart=/usr/bin/python3 -u /opt/diplay/scripts/bt_agent.py
 Restart=always
 RestartSec=3
 StandardOutput=journal

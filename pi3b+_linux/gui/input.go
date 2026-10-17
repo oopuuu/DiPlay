@@ -49,11 +49,12 @@ type InputManager struct {
 	hasFilterState bool
 	filterX        float64
 	filterY        float64
+	touchSampleCount int
 }
 
 func NewInputManager(touchPath, mousePath string) *InputManager {
 	im := &InputManager{
-		Events: make(chan TouchEvent, 64),
+		Events: make(chan TouchEvent, 256),
 		curX:   ScreenWidth / 2,
 		curY:   ScreenHeight / 2,
 	}
@@ -84,6 +85,55 @@ func NewInputManager(touchPath, mousePath string) *InputManager {
 
 	return im
 }
+
+type PresetOrientation struct {
+	Name  string
+	Calib CalibrationData
+}
+
+var presetOrientations = []PresetOrientation{
+	{
+		Name: "官方驱动标准 (ADS7846 实测全屏精校)",
+		Calib: CalibrationData{
+			A: 0.0, B: -0.3721, C: 539.5,
+			D: 0.2735, E: 0.0, F: -8.2,
+			Valid: true,
+		},
+	},
+	{
+		Name: "官方驱动 (12-bit原始缩放)",
+		Calib: CalibrationData{
+			A: 0.0, B: -0.1294, C: 509.38,
+			D: 0.0886, E: 0.0, F: -23.74,
+			Valid: true,
+		},
+	},
+	{
+		Name: "横屏 X轴反转",
+		Calib: CalibrationData{
+			A: 0.0, B: 0.3876, C: -53.0,
+			D: 0.2290, E: 0.0, F: 29.0,
+			Valid: true,
+		},
+	},
+	{
+		Name: "横屏 Y轴反转",
+		Calib: CalibrationData{
+			A: 0.0, B: -0.3876, C: 533.0,
+			D: -0.2290, E: 0.0, F: 291.0,
+			Valid: true,
+		},
+	},
+	{
+		Name: "直通模式 (无轴交换)",
+		Calib: CalibrationData{
+			A: 480.0 / 1024.0, B: 0.0, C: 0.0,
+			D: 0.0, E: 320.0 / 1024.0, F: 0.0,
+			Valid: true,
+		},
+	},
+}
+var currentPresetIndex = 0
 
 func (im *InputManager) LoadCalibration() {
 	// 1. Try /etc/pointercal (official tslib standard output)
@@ -128,18 +178,36 @@ func (im *InputManager) LoadCalibration() {
 		}
 	}
 
-	// 3. Fallback to Physically Calibrated Golden Matrix:
-	im.Calib = CalibrationData{
-		A:     -0.0242685,
-		B:     -0.4264016,
-		C:     560.60476,
-		D:     0.2453592,
-		E:     -0.0043173,
-		F:     23.49689,
-		Valid: true,
-	}
-	log.Printf("[Input] Loaded factory golden calibration for 3.5\" rotate=90 (A=%.5f, B=%.5f, C=%.2f, D=%.5f, E=%.5f, F=%.2f)",
+	// 3. Fallback to Verified Golden GoodTFT 3.5" (rotate=90, SwapAxes=1, InvertX, InvertY)
+	// Screen X = (3880 - rawY) * 480 / (3880 - 268) = -0.13289*rawY + 515.6146
+	// Screen Y = (3936 - rawX) * 320 / (3936 - 227) = -0.08628*rawX + 339.5632
+	im.Calib = presetOrientations[0].Calib
+	log.Printf("[Input] Loaded verified GoodTFT golden calibration for 3.5\" rotate=90 (A=%.5f, B=%.5f, C=%.2f, D=%.5f, E=%.5f, F=%.2f)",
 		im.Calib.A, im.Calib.B, im.Calib.C, im.Calib.D, im.Calib.E, im.Calib.F)
+}
+
+func (im *InputManager) ToggleOrientation() (int, string) {
+	currentPresetIndex = (currentPresetIndex + 1) % len(presetOrientations)
+	p := presetOrientations[currentPresetIndex]
+	im.SaveCalibration(p.Calib)
+	log.Printf("[Input] Toggled to preset orientation mode %d: %s", currentPresetIndex, p.Name)
+	return currentPresetIndex, p.Name
+}
+
+func (im *InputManager) ResetGoldenCalibration() string {
+	currentPresetIndex = 0
+	p := presetOrientations[0]
+	_ = os.Remove(CalibFilePath)
+	im.SaveCalibration(p.Calib)
+	log.Printf("[Input] Reset to golden calibration: %s", p.Name)
+	return p.Name
+}
+
+func (im *InputManager) GetCurrentPresetName() string {
+	if currentPresetIndex >= 0 && currentPresetIndex < len(presetOrientations) {
+		return presetOrientations[currentPresetIndex].Name
+	}
+	return "自定义校准"
 }
 
 func (im *InputManager) ApplyTemporaryCalibration(c CalibrationData) {
@@ -180,6 +248,7 @@ func (im *InputManager) watchdogReleaseLoop() {
 		if im.isPressed && time.Since(im.lastTouchTime) > 180*time.Millisecond {
 			im.isPressed = false
 			im.hasFilterState = false
+			im.touchSampleCount = 0
 			evt := TouchEvent{
 				X:        im.curX,
 				Y:        im.curY,
@@ -232,6 +301,7 @@ func (im *InputManager) readTouchLoop() {
 					if im.isPressed {
 						im.isPressed = false
 						im.hasFilterState = false
+						im.touchSampleCount = 0
 						evt := TouchEvent{
 							X:        im.curX,
 							Y:        im.curY,
@@ -259,6 +329,7 @@ func (im *InputManager) readTouchLoop() {
 					if im.isPressed {
 						im.isPressed = false
 						im.hasFilterState = false
+						im.touchSampleCount = 0
 						evt := TouchEvent{
 							X:        im.curX,
 							Y:        im.curY,
@@ -281,15 +352,9 @@ func (im *InputManager) readTouchLoop() {
 			if hasCoordUpdate {
 				hasCoordUpdate = false
 				im.lastTouchTime = time.Now()
-				im.isPressed = true
+				im.isPressed = (im.pressure > 20)
 
-				// 过滤未接触或未按紧时的假零跳变噪点
-				if im.rawX < 20 || im.rawY < 20 {
-					im.mu.Unlock()
-					continue
-				}
-
-				// 应用仿射校准
+				// 纯直通模式，不做任何过滤
 				fx := im.Calib.A*float64(im.rawX) + im.Calib.B*float64(im.rawY) + im.Calib.C
 				fy := im.Calib.D*float64(im.rawX) + im.Calib.E*float64(im.rawY) + im.Calib.F
 				rawSX := int(fx)
@@ -308,30 +373,16 @@ func (im *InputManager) readTouchLoop() {
 					rawSY = ScreenHeight - 1
 				}
 
-				// 指数加权移动平均滤波 (EMA Dejitter Filter)，去除电阻屏微小抖动
-				if !im.hasFilterState {
-					im.filterX = float64(rawSX)
-					im.filterY = float64(rawSY)
-					im.hasFilterState = true
-				} else {
-					im.filterX = 0.35*im.filterX + 0.65*float64(rawSX)
-					im.filterY = 0.35*im.filterY + 0.65*float64(rawSY)
-				}
-
-				sx := int(im.filterX + 0.5)
-				sy := int(im.filterY + 0.5)
-
-				im.curX = sx
-				im.curY = sy
-
-				log.Printf("[Touch] Raw=(%d, %d) -> Screen=(%d, %d)", im.rawX, im.rawY, im.curX, im.curY)
+				im.curX = rawSX
+				im.curY = rawSY
 
 				evt := TouchEvent{
-					X:       im.curX,
-					Y:       im.curY,
-					RawX:    im.rawX,
-					RawY:    im.rawY,
-					Pressed: true,
+					X:        im.curX,
+					Y:        im.curY,
+					RawX:     im.rawX,
+					RawY:     im.rawY,
+					Pressed:  im.isPressed,
+					Released: !im.isPressed,
 				}
 				im.mu.Unlock()
 				select {

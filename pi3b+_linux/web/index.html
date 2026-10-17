@@ -4,6 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>DiPlay Web Remote · CarPlay 浏览器投屏与控制</title>
+<script src="/ffmpeg_webgl.js"></script>
+<script>
+  window.Module = {
+    locateFile: function(path) {
+      if (path && path.endsWith('.wasm')) return '/' + path;
+      return path;
+    }
+  };
+</script>
+<script src="/libffmpeg_264.js"></script>
 <style>
   :root {
     --bg-primary: #070a10;
@@ -66,33 +76,46 @@
   /* Top Floating Island Header */
   .floating-header {
     position: fixed;
-    top: 14px;
+    top: 12px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 40;
+    height: 38px;
     display: flex;
     align-items: center;
-    gap: 12px;
-    background: rgba(14, 20, 34, 0.72);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    flex-wrap: nowrap;
+    gap: 8px;
+    background: rgba(14, 20, 34, 0.85);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
     border: 1px solid var(--border-card);
     border-radius: 9999px;
-    padding: 6px 16px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
-    transition: opacity 0.3s ease, transform 0.3s ease;
+    padding: 0 10px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05);
+    transition: opacity 0.3s ease, transform 0.3s ease, background 0.2s ease;
+    user-select: none;
+    max-width: calc(100vw - 16px);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .floating-header::-webkit-scrollbar {
+    display: none;
+  }
+  .floating-header * {
+    white-space: nowrap !important;
   }
   .floating-header:hover {
-    background: rgba(14, 20, 34, 0.92);
+    background: rgba(14, 20, 34, 0.95);
   }
   .brand-chip {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     font-weight: 700;
-    font-size: 0.92rem;
-    letter-spacing: 0.4px;
+    font-size: 0.82rem;
+    letter-spacing: 0.3px;
     color: #fff;
+    flex-shrink: 0;
   }
   .brand-logo {
     width: 22px;
@@ -102,32 +125,44 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.75rem;
-    font-weight: bold;
+    font-size: 0.72rem;
+    font-weight: 800;
     box-shadow: 0 0 10px var(--accent-glow);
+    flex-shrink: 0;
   }
   .status-chip {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    font-size: 0.75rem;
-    padding: 3px 8px;
+    gap: 5px;
+    height: 24px;
+    font-size: 0.72rem;
+    padding: 0 9px;
     border-radius: 9999px;
     background: rgba(16, 185, 129, 0.16);
     color: #34d399;
     font-weight: 600;
+    flex-shrink: 0;
+    transition: all 0.2s ease;
   }
   .status-chip.idle {
     background: rgba(148, 163, 184, 0.16);
     color: #94a3b8;
   }
+  .status-chip.clickable {
+    cursor: pointer;
+  }
+  .status-chip.clickable:hover {
+    filter: brightness(1.2);
+    transform: scale(1.02);
+  }
   .status-dot {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     background: #10b981;
     box-shadow: 0 0 8px #10b981;
     animation: pulse 2s infinite;
+    flex-shrink: 0;
   }
   .status-chip.idle .status-dot {
     background: #64748b;
@@ -139,39 +174,92 @@
     50% { opacity: 0.4; transform: scale(0.85); }
   }
   .meta-tag {
-    font-size: 0.76rem;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 6px;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     color: var(--text-secondary);
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: all 0.2s ease;
+  }
+  .meta-tag.clickable {
+    cursor: pointer;
+  }
+  .meta-tag.clickable:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  .meta-tag.hw-warn {
+    background: rgba(245, 158, 11, 0.18);
+    border-color: rgba(245, 158, 11, 0.45);
+    color: #fbbf24;
+  }
+  .meta-tag.hw-crit {
+    background: rgba(239, 68, 68, 0.22);
+    border-color: rgba(239, 68, 68, 0.55);
+    color: #f87171;
+    animation: pulse 1.5s infinite;
+  }
+  .meta-tag.diag-warn {
+    background: rgba(245, 158, 11, 0.2);
+    border-color: rgba(245, 158, 11, 0.5);
+    color: #fcd34d;
+    font-weight: 600;
+  }
+  .meta-tag.diag-crit {
+    background: rgba(239, 68, 68, 0.25);
+    border-color: rgba(239, 68, 68, 0.65);
+    color: #fca5a5;
+    font-weight: 700;
+    animation: pulse 1.2s infinite;
   }
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 6px;
-    margin-left: 6px;
+    gap: 5px;
+    margin-left: 2px;
+    flex-shrink: 0;
+  }
+  @media (max-width: 768px) {
+    .brand-title {
+      display: none;
+    }
+  }
+  @media (max-width: 540px) {
+    #tagResolution {
+      display: none;
+    }
   }
   .icon-btn {
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.1);
     color: var(--text-primary);
-    border-radius: 9999px;
+    border-radius: 50%;
     width: 28px;
     height: 28px;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     transition: all 0.2s ease;
   }
   .icon-btn:hover {
     background: rgba(59, 130, 246, 0.3);
     border-color: var(--accent);
     transform: scale(1.08);
+    color: #fff;
   }
 
-  /* Bottom Floating Control Dock */
+  /* Bottom Floating Control Dock - Unified Pro Aesthetics */
   .control-dock {
     position: fixed;
     bottom: 20px;
@@ -180,55 +268,106 @@
     z-index: 40;
     display: flex;
     align-items: center;
-    gap: 8px;
-    background: rgba(14, 20, 34, 0.78);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    gap: 6px;
+    background: rgba(14, 20, 34, 0.82);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
     border: 1px solid var(--border-card);
-    border-radius: 20px;
-    padding: 8px 14px;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
-    opacity: 0.45;
+    border-radius: 16px;
+    padding: 6px 10px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.65);
+    opacity: 0.65;
     transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    max-width: calc(100vw - 20px);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .control-dock::-webkit-scrollbar {
+    display: none;
   }
   .control-dock:hover, .control-dock.active {
     opacity: 1;
     transform: translateX(-50%) translateY(-2px);
-    background: rgba(14, 20, 34, 0.94);
+    background: rgba(14, 20, 34, 0.95);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(56, 189, 248, 0.25);
+  }
+  .dock-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
   }
   .dock-btn {
+    height: 36px;
+    min-height: 36px;
+    max-height: 36px;
+    box-sizing: border-box;
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.08);
     color: var(--text-primary);
-    padding: 8px 14px;
-    border-radius: 12px;
-    font-size: 0.88rem;
+    padding: 0 12px;
+    border-radius: 10px;
+    font-size: 0.82rem;
     font-weight: 600;
     cursor: pointer;
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
+    justify-content: center;
+    gap: 5px;
+    white-space: nowrap;
     transition: all 0.15s ease;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .dock-btn.icon-only {
+    width: 36px;
+    min-width: 36px;
+    max-width: 36px;
+    padding: 0;
+    font-size: 0.92rem;
+  }
+  .media-cluster {
+    background: rgba(0, 0, 0, 0.35);
+    padding: 2px;
+    border-radius: 11px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    gap: 2px;
+  }
+  .media-cluster .dock-btn {
+    height: 32px;
+    min-height: 32px;
+    width: 34px;
+    min-width: 34px;
+    max-width: 34px;
+    border-radius: 8px;
+    background: transparent;
+    border: none;
+    padding: 0;
+  }
+  .media-cluster .dock-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
   }
   .dock-btn:hover {
-    background: rgba(59, 130, 246, 0.25);
+    background: rgba(59, 130, 246, 0.22);
     border-color: var(--accent);
-    transform: translateY(-2px);
+    transform: translateY(-1px);
+    color: #fff;
   }
   .dock-btn:active {
-    transform: scale(0.95);
+    transform: scale(0.96);
   }
   .dock-btn.home-btn {
-    background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(139, 92, 246, 0.25));
-    border-color: rgba(99, 102, 241, 0.4);
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.22), rgba(139, 92, 246, 0.22));
+    border-color: rgba(99, 102, 241, 0.45);
   }
   .dock-btn.siri-btn {
-    background: linear-gradient(135deg, rgba(236, 72, 153, 0.25), rgba(168, 85, 247, 0.25));
-    border-color: rgba(236, 72, 153, 0.4);
+    background: linear-gradient(135deg, rgba(236, 72, 153, 0.22), rgba(168, 85, 247, 0.22));
+    border-color: rgba(236, 72, 153, 0.45);
   }
   .dock-btn.active-pop {
     background: rgba(59, 130, 246, 0.4);
     border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(59, 130, 246, 0.45);
   }
   .dock-btn.active-mic {
     background: rgba(239, 68, 68, 0.35);
@@ -236,19 +375,17 @@
     color: #fca5a5;
     animation: micPulse 1.5s infinite;
   }
-  @keyframes micPulse {
-    0%, 100% { box-shadow: 0 0 4px rgba(239, 68, 68, 0.4); }
-    50% { box-shadow: 0 0 16px rgba(239, 68, 68, 0.9); }
-  }
   .dock-btn.active-audio {
+    background: rgba(16, 185, 129, 0.2);
     border-color: #10b981;
     color: #6ee7b7;
   }
   .dock-divider {
     width: 1px;
-    height: 22px;
-    background: var(--border-card);
+    height: 18px;
+    background: rgba(255, 255, 255, 0.12);
     margin: 0 2px;
+    flex-shrink: 0;
   }
 
   /* Resolution Picker Popover */
@@ -265,10 +402,44 @@
     padding: 12px;
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7);
     z-index: 50;
-    width: 320px;
+    width: 330px;
     display: none;
     opacity: 0;
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .fit-mode-group {
+    display: flex;
+    background: rgba(0, 0, 0, 0.35);
+    padding: 3px;
+    border-radius: 10px;
+    gap: 4px;
+    margin-bottom: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .fit-mode-btn {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 6px 4px;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+  }
+  .fit-mode-btn:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .fit-mode-btn.active {
+    background: var(--accent);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
   }
   .res-popover.show {
     display: block;
@@ -317,6 +488,86 @@
   .res-badge {
     font-size: 0.72rem;
     color: var(--text-secondary);
+  }
+
+  /* Immersive Mode Transitions & Controls */
+  body.immersive-mode .floating-header {
+    transform: translateX(-50%) translateY(-140%) !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+  body.immersive-mode .control-dock {
+    transform: translateX(-50%) translateY(160%) !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+  body.immersive-mode .aspect-hint {
+    opacity: 0 !important;
+    pointer-events: none !important;
+    transform: translateX(-50%) translateY(-120%) !important;
+  }
+  body.immersive-mode .res-popover {
+    opacity: 0 !important;
+    pointer-events: none !important;
+    display: none !important;
+  }
+
+  .immersive-trigger {
+    position: fixed;
+    top: 14px;
+    right: 18px;
+    z-index: 90;
+    display: none;
+    align-items: center;
+    gap: 6px;
+    background: rgba(14, 20, 34, 0.45);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 9999px;
+    padding: 6px 14px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.8);
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    opacity: 0.4;
+    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .immersive-trigger:hover {
+    opacity: 1;
+    background: rgba(14, 20, 34, 0.92);
+    color: #fff;
+    border-color: var(--accent);
+    transform: scale(1.05);
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.45);
+  }
+
+  .global-toast {
+    position: fixed;
+    top: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-15px);
+    z-index: 100;
+    background: rgba(14, 20, 34, 0.9);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    border-radius: 9999px;
+    padding: 8px 22px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #fff;
+    pointer-events: none;
+    opacity: 0;
+    transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .global-toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
   }
 
   /* Suggestion Banner (Auto-adaptation prompt) */
@@ -402,10 +653,224 @@
     border-radius: 50%;
     animation: spin 1s linear infinite;
   }
-  @keyframes spin {
-    to { transform: rotate(360deg); }
+  /* Wi-Fi & Hotspot Popover Custom Styles */
+  .wifi-card {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 12px;
   }
+  .wifi-action-btn {
+    transition: all 0.2s ease;
+  }
+  .wifi-action-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+  .wifi-action-btn:active {
+    transform: scale(0.97);
+  }
+  .wifi-item {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 8px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .wifi-item:hover {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: rgba(59, 130, 246, 0.4);
+  }
+  .wifi-item.active {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: rgba(16, 185, 129, 0.5);
+  }
+  .spin-icon {
+    display: inline-block;
+    animation: spin 0.8s linear infinite;
+  }
+
+  /* Built-in Web Terminal & Diagnostic Console */
+  .terminal-modal {
+    position: fixed;
+    bottom: 84px;
+    left: 50%;
+    transform: translateX(-50%) scale(0.96);
+    background: rgba(10, 15, 26, 0.96);
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    border-radius: 18px;
+    padding: 16px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.88);
+    z-index: 55;
+    width: min(780px, 94vw);
+    display: none;
+    opacity: 0;
+    transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .terminal-modal.open {
+    display: block;
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+  .terminal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .term-win-dots {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-right: 4px;
+  }
+  .win-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+  .win-dot.red { background: #ef4444; }
+  .win-dot.yellow { background: #f59e0b; }
+  .win-dot.green { background: #10b981; }
+  .term-status-badge {
+    background: rgba(16, 185, 129, 0.2);
+    border: 1px solid #10b981;
+    color: #6ee7b7;
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-weight: 600;
+  }
+  .term-tool-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #cbd5e1;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .term-tool-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+  }
+  .term-close-btn {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .term-close-btn:hover {
+    color: #fff;
+  }
+  .term-quick-bar {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  @media (max-width: 640px) {
+    .term-quick-bar {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+  .term-chip-btn {
+    background: rgba(56, 189, 248, 0.08);
+    border: 1px solid rgba(56, 189, 248, 0.22);
+    color: #7dd3fc;
+    font-size: 0.74rem;
+    font-weight: 600;
+    height: 32px;
+    padding: 0 6px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: all 0.15s ease;
+  }
+  .term-chip-btn:hover, .term-chip-btn.active {
+    background: rgba(56, 189, 248, 0.22);
+    border-color: #38bdf8;
+    color: #fff;
+    transform: translateY(-1px);
+  }
+  .terminal-screen {
+    background: #050811;
+    color: #38bdf8;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    padding: 12px;
+    border-radius: 10px;
+    height: 260px;
+    max-height: 40vh;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    margin: 0 0 10px 0;
+  }
+  .terminal-input-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #050811;
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    border-radius: 10px;
+    padding: 4px 10px;
+  }
+  .term-prompt {
+    color: #34d399;
+    font-family: monospace;
+    font-weight: 700;
+    font-size: 0.8rem;
+    user-select: none;
+  }
+  .term-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-family: monospace;
+    font-size: 0.82rem;
+    outline: none;
+    padding: 6px 0;
+  }
+  .term-submit-btn {
+    background: #0284c7;
+    border: none;
+    color: #fff;
+    font-size: 0.78rem;
+    font-weight: 700;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .term-submit-btn:hover {
+    background: #0369a1;
 </style>
+<script>
+!function(e,t){"object"==typeof exports&&"undefined"!=typeof module?module.exports=t(require("stream")):"function"==typeof define&&define.amd?define(["stream"],t):(e="undefined"!=typeof globalThis?globalThis:e||self).JMuxer=t(e.stream)}(this,function(e){"use strict";function t(e,t){(null==t||t>e.length)&&(t=e.length);for(var r=0,n=Array(t);r<t;r++)n[r]=e[r];return n}function r(e,t,r){return t=u(t),function(e,t){if(t&&("object"==typeof t||"function"==typeof t))return t;if(void 0!==t)throw new TypeError("Derived constructors may only return object or undefined");return function(e){if(void 0===e)throw new ReferenceError("this hasn't been initialised - super() hasn't been called");return e}(e)}(e,c()?Reflect.construct(t,r||[],u(e).constructor):t.apply(e,r))}function n(e,t){if(!(e instanceof t))throw new TypeError("Cannot call a class as a function")}function i(e,t){for(var r=0;r<t.length;r++){var n=t[r];n.enumerable=n.enumerable||!1,n.configurable=!0,"value"in n&&(n.writable=!0),Object.defineProperty(e,p(n.key),n)}}function a(e,t,r){return t&&i(e.prototype,t),r&&i(e,r),Object.defineProperty(e,"prototype",{writable:!1}),e}function s(e,t){var r="undefined"!=typeof Symbol&&e[Symbol.iterator]||e["@@iterator"];if(!r){if(Array.isArray(e)||(r=v(e))||t){r&&(e=r);var n=0,i=function(){};return{s:i,n:function(){return n>=e.length?{done:!0}:{done:!1,value:e[n++]}},e:function(e){throw e},f:i}}throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.")}var a,s=!0,o=!1;return{s:function(){r=r.call(e)},n:function(){var e=r.next();return s=e.done,e},e:function(e){o=!0,a=e},f:function(){try{s||null==r.return||r.return()}finally{if(o)throw a}}}}function o(e,t,r){return(t=p(t))in e?Object.defineProperty(e,t,{value:r,enumerable:!0,configurable:!0,writable:!0}):e[t]=r,e}function u(e){return u=Object.setPrototypeOf?Object.getPrototypeOf.bind():function(e){return e.__proto__||Object.getPrototypeOf(e)},u(e)}function l(e,t){if("function"!=typeof t&&null!==t)throw new TypeError("Super expression must either be null or a function");e.prototype=Object.create(t&&t.prototype,{constructor:{value:e,writable:!0,configurable:!0}}),Object.defineProperty(e,"prototype",{writable:!1}),t&&d(e,t)}function c(){try{var e=!Boolean.prototype.valueOf.call(Reflect.construct(Boolean,[],function(){}))}catch(e){}return(c=function(){return!!e})()}function d(e,t){return d=Object.setPrototypeOf?Object.setPrototypeOf.bind():function(e,t){return e.__proto__=t,e},d(e,t)}function f(e,t){return function(e){if(Array.isArray(e))return e}(e)||function(e,t){var r=null==e?null:"undefined"!=typeof Symbol&&e[Symbol.iterator]||e["@@iterator"];if(null!=r){var n,i,a,s,o=[],u=!0,l=!1;try{if(a=(r=r.call(e)).next,0===t);else for(;!(u=(n=a.call(r)).done)&&(o.push(n.value),o.length!==t);u=!0);}catch(e){l=!0,i=e}finally{try{if(!u&&null!=r.return&&(s=r.return(),Object(s)!==s))return}finally{if(l)throw i}}return o}}(e,t)||v(e,t)||function(){throw new TypeError("Invalid attempt to destructure non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.")}()}function h(e){return function(e){if(Array.isArray(e))return t(e)}(e)||function(e){if("undefined"!=typeof Symbol&&null!=e[Symbol.iterator]||null!=e["@@iterator"])return Array.from(e)}(e)||v(e)||function(){throw new TypeError("Invalid attempt to spread non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.")}()}function p(e){var t=function(e,t){if("object"!=typeof e||!e)return e;var r=e[Symbol.toPrimitive];if(void 0!==r){var n=r.call(e,t);if("object"!=typeof n)return n;throw new TypeError("@@toPrimitive must return a primitive value.")}return String(e)}(e,"string");return"symbol"==typeof t?t:t+""}function y(e){return y="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(e){return typeof e}:function(e){return e&&"function"==typeof Symbol&&e.constructor===Symbol&&e!==Symbol.prototype?"symbol":typeof e},y(e)}function v(e,r){if(e){if("string"==typeof e)return t(e,r);var n={}.toString.call(e).slice(8,-1);return"Object"===n&&e.constructor&&(n=e.constructor.name),"Map"===n||"Set"===n?Array.from(e):"Arguments"===n||/^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(n)?t(e,r):void 0}}var m,g;function k(e){if(m){for(var t=arguments.length,r=new Array(t>1?t-1:0),n=1;n<t;n++)r[n-1]=arguments[n];m.apply(void 0,[e].concat(r))}}function b(e){if(g){for(var t=arguments.length,r=new Array(t>1?t-1:0),n=1;n<t;n++)r[n-1]=arguments[n];g.apply(void 0,[e].concat(r))}}var U=function(){return a(function e(t){n(this,e),this.listener={},this.type=""|t},[{key:"on",value:function(e,t){return this.listener[e]||(this.listener[e]=[]),this.listener[e].push(t),!0}},{key:"off",value:function(e,t){if(this.listener[e]){var r=this.listener[e].indexOf(t);return r>-1&&this.listener[e].splice(r,1),!0}return!1}},{key:"offAll",value:function(){this.listener={}}},{key:"dispatch",value:function(e){for(var t=arguments.length,r=new Array(t>1?t-1:0),n=1;n<t;n++)r[n-1]=arguments[n];return!!this.listener[e]&&(this.listener[e].map(function(e){e.apply(null,r)}),!0)}}])}(),S=function(){function e(){n(this,e)}return a(e,null,[{key:"init",value:function(){var t;for(t in e.types={avc1:[],avcC:[],btrt:[],dinf:[],dref:[],esds:[],ftyp:[],hdlr:[],hev1:[],hvcC:[],mdat:[],mdhd:[],mdia:[],mfhd:[],minf:[],moof:[],moov:[],mp4a:[],mvex:[],mvhd:[],sdtp:[],stbl:[],stco:[],stsc:[],stsd:[],stsz:[],stts:[],tfdt:[],tfhd:[],traf:[],trak:[],trun:[],trex:[],tkhd:[],vmhd:[],smhd:[]},e.types)e.types.hasOwnProperty(t)&&(e.types[t]=[t.charCodeAt(0),t.charCodeAt(1),t.charCodeAt(2),t.charCodeAt(3)]);var r=new Uint8Array([0,0,0,0,0,0,0,0,118,105,100,101,0,0,0,0,0,0,0,0,0,0,0,0,86,105,100,101,111,72,97,110,100,108,101,114,0]),n=new Uint8Array([0,0,0,0,0,0,0,0,115,111,117,110,0,0,0,0,0,0,0,0,0,0,0,0,83,111,117,110,100,72,97,110,100,108,101,114,0]);e.HDLR_TYPES={video:r,audio:n};var i=new Uint8Array([0,0,0,0,0,0,0,1,0,0,0,12,117,114,108,32,0,0,0,1]),a=new Uint8Array([0,0,0,0,0,0,0,0]);e.STTS=e.STSC=e.STCO=a,e.STSZ=new Uint8Array([0,0,0,0,0,0,0,0,0,0,0,0]),e.VMHD=new Uint8Array([0,0,0,1,0,0,0,0,0,0,0,0]),e.SMHD=new Uint8Array([0,0,0,0,0,0,0,0]),e.STSD=new Uint8Array([0,0,0,0,0,0,0,1]);var s=new Uint8Array([105,115,111,109]),o=new Uint8Array([97,118,99,49]),u=new Uint8Array([0,0,0,1]);e.FTYP=e.box(e.types.ftyp,s,u,s,o),e.DINF=e.box(e.types.dinf,e.box(e.types.dref,i))}},{key:"box",value:function(e){for(var t=arguments.length,r=new Array(t>1?t-1:0),n=1;n<t;n++)r[n-1]=arguments[n];for(var i,a=8,s=r.length,o=s;s--;)a+=r[s].byteLength;for((i=new Uint8Array(a))[0]=a>>24&255,i[1]=a>>16&255,i[2]=a>>8&255,i[3]=255&a,i.set(e,4),s=0,a=8;s<o;++s)i.set(r[s],a),a+=r[s].byteLength;return i}},{key:"hdlr",value:function(t){return e.box(e.types.hdlr,e.HDLR_TYPES[t])}},{key:"mdat",value:function(t){return e.box(e.types.mdat,t)}},{key:"mdhd",value:function(t,r){return e.box(e.types.mdhd,new Uint8Array([0,0,0,0,0,0,0,2,0,0,0,3,t>>24&255,t>>16&255,t>>8&255,255&t,r>>>24&255,r>>>16&255,r>>>8&255,255&r,85,196,0,0]))}},{key:"mdia",value:function(t){return e.box(e.types.mdia,e.mdhd(t.timescale,t.duration),e.hdlr(t.type),e.minf(t))}},{key:"mfhd",value:function(t){return e.box(e.types.mfhd,new Uint8Array([0,0,0,0,t>>24,t>>16&255,t>>8&255,255&t]))}},{key:"minf",value:function(t){return"audio"===t.type?e.box(e.types.minf,e.box(e.types.smhd,e.SMHD),e.DINF,e.stbl(t)):e.box(e.types.minf,e.box(e.types.vmhd,e.VMHD),e.DINF,e.stbl(t))}},{key:"moof",value:function(t,r,n){return e.box(e.types.moof,e.mfhd(t),e.traf(n,r))}},{key:"moov",value:function(t,r,n){for(var i=t.length,a=[];i--;)a[i]=e.trak(t[i]);return e.box.apply(null,[e.types.moov,e.mvhd(n,r)].concat(a).concat(e.mvex(t)))}},{key:"mvex",value:function(t){for(var r=t.length,n=[];r--;)n[r]=e.trex(t[r]);return e.box.apply(null,[e.types.mvex].concat(n))}},{key:"mvhd",value:function(t,r){var n=new Uint8Array([0,0,0,0,0,0,0,1,0,0,0,2,t>>24&255,t>>16&255,t>>8&255,255&t,r>>>24&255,r>>>16&255,r>>>8&255,255&r,0,1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,64,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,255,255,255,255]);return e.box(e.types.mvhd,n)}},{key:"sdtp",value:function(t){var r,n,i=t.samples||[],a=new Uint8Array(4+i.length);for(n=0;n<i.length;n++)r=i[n].flags,a[n+4]=r.dependsOn<<4|r.isDependedOn<<2|r.hasRedundancy;return e.box(e.types.sdtp,a)}},{key:"stbl",value:function(t){return e.box(e.types.stbl,e.stsd(t),e.box(e.types.stts,e.STTS),e.box(e.types.stsc,e.STSC),e.box(e.types.stsz,e.STSZ),e.box(e.types.stco,e.STCO))}},{key:"avc1",value:function(t){var r,n,i,a=[],s=[];for(r=0;r<t.sps.length;r++)i=(n=t.sps[r]).byteLength,a.push(i>>>8&255),a.push(255&i),a=a.concat(Array.prototype.slice.call(n));for(r=0;r<t.pps.length;r++)i=(n=t.pps[r]).byteLength,s.push(i>>>8&255),s.push(255&i),s=s.concat(Array.prototype.slice.call(n));var o=e.box(e.types.avcC,new Uint8Array([1,a[3],a[4],a[5],255,224|t.sps.length].concat(a).concat([t.pps.length]).concat(s))),u=t.width,l=t.height;return e.box(e.types.avc1,new Uint8Array([0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,u>>8&255,255&u,l>>8&255,255&l,0,72,0,0,0,72,0,0,0,0,0,0,0,1,18,98,105,110,101,108,112,114,111,46,114,117,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,24,17,17]),o,e.box(e.types.btrt,new Uint8Array([0,28,156,128,0,45,198,192,0,45,198,192])))}},{key:"hev1",value:function(t){for(var r,n,i=[],a=[],s=[],o=0;o<((null===(u=t.vps)||void 0===u?void 0:u.length)||0);o++){var u;n=(r=t.vps[o]).byteLength,i.push(n>>>8&255,255&n),i=i.concat(Array.prototype.slice.call(r))}for(var l=0;l<((null===(c=t.sps)||void 0===c?void 0:c.length)||0);l++){var c;n=(r=t.sps[l]).byteLength,a.push(n>>>8&255,255&n),a=a.concat(Array.prototype.slice.call(r))}for(var d=0;d<((null===(f=t.pps)||void 0===f?void 0:f.length)||0);d++){var f;n=(r=t.pps[d]).byteLength,s.push(n>>>8&255,255&n),s=s.concat(Array.prototype.slice.call(r))}var p=t.hvcC,y=p.profile_space,v=p.tier_flag,m=p.profile_idc,g=p.profile_compatibility_flags,k=p.constraint_indicator_flags,b=p.level_idc,U=p.chroma_format_idc,S=e.box(e.types.hvcC,new Uint8Array([1,y<<6|v<<5|m,g>>24&255,g>>16&255,g>>8&255,255&g].concat(h(k),[b,240,0,252,252|U,248,248,0,0,3,3,32,t.vps.length>>>8&255,255&t.vps.length],h(i),[33,t.sps.length>>>8&255,255&t.sps.length],h(a),[34,t.pps.length>>>8&255,255&t.pps.length],h(s)))),B=t.width,w=t.height;return e.box(e.types.hev1,new Uint8Array([0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,B>>8&255,255&B,w>>8&255,255&w,0,72,0,0,0,72,0,0,0,0,0,0,0,1,18,98,105,110,101,108,112,114,111,46,114,117,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,24,17,17]),S,e.box(e.types.btrt,new Uint8Array([0,28,156,128,0,45,198,192,0,45,198,192])))}},{key:"esds",value:function(e){var t=e.config.byteLength,r=new Uint8Array(26+t+3);return r.set([0,0,0,0,3,23+t,0,1,0,4,15+t,64,21,0,0,0,0,0,0,0,0,0,0,0,5,t]),r.set(e.config,26),r.set([6,1,2],26+t),r}},{key:"mp4a",value:function(t){var r=t.audiosamplerate;return e.box(e.types.mp4a,new Uint8Array([0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,t.channelCount,0,16,0,0,0,0,r>>8&255,255&r,0,0]),e.box(e.types.esds,e.esds(t)))}},{key:"stsd",value:function(t){return"audio"===t.type?e.box(e.types.stsd,e.STSD,e.mp4a(t)):t.codec.startsWith("hvc1")?e.box(e.types.stsd,e.STSD,e.hev1(t)):e.box(e.types.stsd,e.STSD,e.avc1(t))}},{key:"tkhd",value:function(t){var r=t.id,n=t.duration,i=t.width,a=t.height,s=t.volume;return e.box(e.types.tkhd,new Uint8Array([0,0,0,7,0,0,0,0,0,0,0,0,r>>24&255,r>>16&255,r>>8&255,255&r,0,0,0,0,n>>>24&255,n>>>16&255,n>>>8&255,255&n,0,0,0,0,0,0,0,0,0,0,0,0,255&s,s%1*10&255,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,64,0,0,0,i>>8&255,255&i,0,0,a>>8&255,255&a,0,0]))}},{key:"traf",value:function(t,r){var n=e.sdtp(t),i=t.id;return e.box(e.types.traf,e.box(e.types.tfhd,new Uint8Array([0,0,0,0,i>>24,i>>16&255,i>>8&255,255&i])),e.box(e.types.tfdt,new Uint8Array([0,0,0,0,r>>24,r>>16&255,r>>8&255,255&r])),e.trun(t,n.length+16+16+8+16+8+8),n)}},{key:"trak",value:function(t){return t.duration=t.duration||4294967295,e.box(e.types.trak,e.tkhd(t),e.mdia(t))}},{key:"trex",value:function(t){var r=t.id;return e.box(e.types.trex,new Uint8Array([0,0,0,0,r>>24,r>>16&255,r>>8&255,255&r,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,1]))}},{key:"trun",value:function(t,r){var n,i,a,s,o,u,l=t.samples||[],c=l.length,d=12+16*c,f=new Uint8Array(d);for(r+=8+d,f.set([0,0,15,1,c>>>24&255,c>>>16&255,c>>>8&255,255&c,r>>>24&255,r>>>16&255,r>>>8&255,255&r],0),n=0;n<c;n++)a=(i=l[n]).duration,s=i.size,o=i.flags,u=i.cts,f.set([a>>>24&255,a>>>16&255,a>>>8&255,255&a,s>>>24&255,s>>>16&255,s>>>8&255,255&s,o.isLeading<<2|o.dependsOn,o.isDependedOn<<6|o.hasRedundancy<<4|o.paddingValue<<1|o.isNonSync,61440&o.degradPrio,15&o.degradPrio,u>>>24&255,u>>>16&255,u>>>8&255,255&u],12+16*n);return e.box(e.types.trun,f)}},{key:"initSegment",value:function(t,r,n){e.types||e.init();var i,a=e.moov(t,r,n);return(i=new Uint8Array(e.FTYP.byteLength+a.byteLength)).set(e.FTYP),i.set(a,e.FTYP.byteLength),i}}])}(),B=function(){function e(){n(this,e)}return a(e,null,[{key:"samplingRateMap",get:function(){return[96e3,88200,64e3,48e3,44100,32e3,24e3,22050,16e3,12e3,11025,8e3,7350]}},{key:"getHeaderLength",value:function(e){return 1&e[1]?7:9}},{key:"getFrameLength",value:function(e){return(3&e[3])<<11|e[4]<<3|(224&e[5])>>>5}},{key:"isAACPattern",value:function(e){return!(255!==e[0]||240&~e[1]||6&e[1])}},{key:"extractAAC",value:function(t){var r,n,i=0,a=t.byteLength,s=[];if(!e.isAACPattern(t))return b("Invalid ADTS audio format"),{valid:!1};r=e.getHeaderLength(t);for(var o=t.subarray(0,r);i<a;)n=e.getFrameLength(t),s.push(t.subarray(r,n)),t=t.slice(n),i+=n;return{valid:!0,header:o,slices:s}}}])}(),w=1,E=function(e){function t(){return n(this,t),r(this,t,arguments)}return l(t,e),a(t,[{key:"flush",value:function(){this.mp4track.len=0,this.mp4track.samples=[]}},{key:"isReady",value:function(){return!(!this.readyToDecode||!this.samples.length)||null}}],[{key:"getTrackID",value:function(){return w++}}])}(U),A=function(e){function t(e,i,a){var s;return n(this,t),(s=r(this,t,["AACRemuxer"])).frameDuration=a,s.readyToDecode=!1,s.header=null,s.nextDts=0,s.dts=0,s.mp4track={id:E.getTrackID(),type:"audio",channelCount:0,len:0,fragmented:!0,timescale:e,duration:i,samples:[],config:"",codec:""},s.samples=[],s}return l(t,e),a(t,[{key:"resetTrack",value:function(){this.readyToDecode=!1,this.header=null,this.mp4track.codec="",this.mp4track.channelCount="",this.mp4track.config="",this.mp4track.timescale=this.timescale,this.nextDts=0,this.dts=0}},{key:"feed",value:function(e,t){var r=B.extractAAC(e),n=r.valid,i=r.header,a=r.slices;return this.header||(this.header=i),n&&a.length>0?(this.remux(this.getAudioFrames(a,t)),!0):(b("Failed to extract audio data from:",e),this.dispatch("outOfData"),!1)}},{key:"getAudioFrames",value:function(e,t){var r,n,i=[],a=0,o=s(e);try{for(o.s();!(n=o.n()).done;){var u=n.value;i.push({units:u})}}catch(e){o.e(e)}finally{o.f()}return r=t?t/i.length|0:this.frameDuration,a=t?t-r*i.length:0,i.map(function(e){e.duration=r,a>0&&(e.duration++,a--)}),i}},{key:"remux",value:function(e){if(e.length>0)for(var t=0;t<e.length;t++){var r=e[t],n=r.units,i=n.byteLength;this.samples.push({units:n,size:i,duration:r.duration}),this.mp4track.len+=i,this.readyToDecode||this.setAACConfig()}}},{key:"getPayload",value:function(){if(!this.isReady())return null;var e,t,r=new Uint8Array(this.mp4track.len),n=0,i=this.mp4track.samples;for(this.dts=this.nextDts;this.samples.length;){var a=this.samples.shift();a.units,(t=a.duration)<=0?(k("remuxer: invalid sample duration at DTS: ".concat(this.nextDts," :").concat(t)),this.mp4track.len-=a.size):(this.nextDts+=t,e={size:a.size,duration:t,cts:0,flags:{isLeading:0,isDependedOn:0,hasRedundancy:0,degradPrio:0,dependsOn:1}},r.set(a.units,n),n+=a.size,i.push(e))}return i.length?new Uint8Array(r.buffer,0,this.mp4track.len):null}},{key:"setAACConfig",value:function(){var e,t,r,n=new Uint8Array(2);this.header&&(e=((192&this.header[2])>>>6)+1,t=(60&this.header[2])>>>2,r=(1&this.header[2])<<2,r|=(192&this.header[3])>>>6,n[0]=e<<3,n[0]|=(14&t)>>1,n[1]|=(1&t)<<7,n[1]|=r<<3,this.mp4track.codec="mp4a.40."+e,this.mp4track.channelCount=r,this.mp4track.config=n,this.readyToDecode=!0)}}])}(E),D=function(){return a(function e(t){n(this,e),this.data=t,this.index=0,this.bitLength=8*t.byteLength},[{key:"setData",value:function(e){this.data=e,this.index=0,this.bitLength=8*e.byteLength}},{key:"bitsAvailable",get:function(){return this.bitLength-this.index}},{key:"skipBits",value:function(e){if(this.bitsAvailable<e)return!1;this.index+=e}},{key:"readBits",value:function(e){var t=!(arguments.length>1&&void 0!==arguments[1])||arguments[1];return this.getBits(e,this.index,t)}},{key:"getBits",value:function(e,t){var r=!(arguments.length>2&&void 0!==arguments[2])||arguments[2];if(this.bitsAvailable<e)return 0;var n=t%8,i=this.data[t/8|0]&255>>>n,a=8-n;if(a>=e)return r&&(this.index+=e),i>>a-e;r&&(this.index+=a);var s=e-a;return i<<s|this.getBits(s,t+a,r)}},{key:"skipLZ",value:function(){var e;for(e=0;e<this.bitLength-this.index;++e)if(0!==this.getBits(1,this.index+e,!1))return this.index+=e,e;return e}},{key:"skipUEG",value:function(){this.skipBits(1+this.skipLZ())}},{key:"skipEG",value:function(){this.skipBits(1+this.skipLZ())}},{key:"readUEG",value:function(){var e=this.skipLZ();return this.readBits(e+1)-1}},{key:"readEG",value:function(){var e=this.readUEG();return 1&e?1+e>>>1:-1*(e>>>1)}},{key:"readBoolean",value:function(){return 1===this.readBits(1)}},{key:"readUByte",value:function(){var e=arguments.length>0&&void 0!==arguments[0]?arguments[0]:1;return this.readBits(8*e)}},{key:"readUShort",value:function(){return this.readBits(16)}},{key:"readUInt",value:function(){return this.readBits(32)}}])}(),x=function(){function e(){n(this,e)}return a(e,null,[{key:"extractNALu",value:function(e){for(var t=0,r=e.byteLength,n=[],i=0,a=0;t<r;){var s=e[t++];if(0===s)a++;else if(1===s&&a>=2){var o=a+1;i!==t-o&&n.push(e.subarray(i,t-o)),i=t,a=0}else a=0}var u=null;return i<r&&(u=e.subarray(i,r)),[n,u]}},{key:"skipScalingList",value:function(e,t){for(var r=8,n=8,i=0;i<t;i++)0!==n&&(n=(r+e.readEG()+256)%256),r=0===n?r:n}},{key:"readSPS",value:function(t){var r,n,i,a,s,o,u=new D(t),l=0,c=0,d=0,f=0,h=1,p=0;u.readUByte();for(var y=[],v=t.byteLength,m=1;m<v;m++)m+2<v&&3===u.readBits(24,!1)?(y.push(u.readBits(8)),y.push(u.readBits(8)),m+=2,u.readBits(8)):y.push(u.readBits(8));if(u.setData(new Uint8Array(y)),r=u.readUByte(),u.readBits(5),u.skipBits(3),u.readUByte(),u.skipUEG(),100===r||110===r||122===r||244===r||44===r||83===r||86===r||118===r||128===r){var g=u.readUEG();if(3===g&&u.skipBits(1),u.skipUEG(),u.skipUEG(),u.skipBits(1),u.readBoolean()){o=3!==g?8:12;for(var k=0;k<o;++k)u.readBoolean()&&(k<6?e.skipScalingList(u,16):e.skipScalingList(u,64))}}u.skipUEG();var b=u.readUEG();if(0===b)u.readUEG();else if(1===b){u.skipBits(1),u.skipEG(),u.skipEG(),n=u.readUEG();for(var U=0;U<n;++U)u.skipEG()}if(u.skipUEG(),u.skipBits(1),i=u.readUEG(),a=u.readUEG(),0===(s=u.readBits(1))&&u.skipBits(1),u.skipBits(1),u.readBoolean()&&(l=u.readUEG(),c=u.readUEG(),d=u.readUEG(),f=u.readUEG()),u.readBoolean()){if(u.readBoolean()){var S;switch(u.readUByte()){case 1:S=[1,1];break;case 2:S=[12,11];break;case 3:S=[10,11];break;case 4:S=[16,11];break;case 5:S=[40,33];break;case 6:S=[24,11];break;case 7:S=[20,11];break;case 8:S=[32,11];break;case 9:S=[80,33];break;case 10:S=[18,11];break;case 11:S=[15,11];break;case 12:S=[64,33];break;case 13:S=[160,99];break;case 14:S=[4,3];break;case 15:S=[3,2];break;case 16:S=[2,1];break;case 255:S=[u.readUByte()<<8|u.readUByte(),u.readUByte()<<8|u.readUByte()]}S&&S[0]>0&&S[1]>0&&(h=S[0]/S[1])}if(u.readBoolean()&&u.skipBits(1),u.readBoolean()&&(u.skipBits(4),u.readBoolean()&&u.skipBits(24)),u.readBoolean()&&(u.skipUEG(),u.skipUEG()),u.readBoolean()){var B=u.readUInt(),w=u.readUInt();u.readBoolean(),p=w/(2*B)}}return{fps:p>0?p:void 0,width:Math.ceil((16*(i+1)-2*l-2*c)*h),height:(2-s)*(a+1)*16-(s?2:4)*(d+f)}}}])}(),C=function(){function e(t){n(this,e),this.payload=t,this.nri=(96&this.payload[0])>>5,this.nalUnitType=31&this.payload[0],this._sliceType=null,this._isFirstSlice=!1}return a(e,[{key:"toString",value:function(){return"".concat(e.TYPES[this.type()]||"UNKNOWN",": NRI: ").concat(this.getNri())}},{key:"getNri",value:function(){return this.nri}},{key:"type",value:function(){return this.nalUnitType}},{key:"isKeyframe",get:function(){return this.nalUnitType===e.IDR}},{key:"isVCL",get:function(){return this.nalUnitType==e.IDR||this.nalUnitType==e.NDR}},{key:"parseHeader",value:function(){var e=new D(this.getPayload());e.readUByte(),this._isFirstSlice=0===e.readUEG(),this._sliceType=e.readUEG()}},{key:"isFirstSlice",get:function(){return this._isFirstSlice||this.parseHeader(),this._isFirstSlice}},{key:"sliceType",get:function(){return this._sliceType||this.parseHeader(),this._sliceType}},{key:"getPayload",value:function(){return this.payload}},{key:"getPayloadSize",value:function(){return this.payload.byteLength}},{key:"getSize",value:function(){return 4+this.getPayloadSize()}},{key:"getData",value:function(){var e=new Uint8Array(this.getSize());return new DataView(e.buffer).setUint32(0,this.getSize()-4),e.set(this.getPayload(),4),e}}],[{key:"NDR",get:function(){return 1}},{key:"IDR",get:function(){return 5}},{key:"SEI",get:function(){return 6}},{key:"SPS",get:function(){return 7}},{key:"PPS",get:function(){return 8}},{key:"AUD",get:function(){return 9}},{key:"TYPES",get:function(){return o(o(o(o(o(o({},e.IDR,"IDR"),e.SEI,"SEI"),e.SPS,"SPS"),e.PPS,"PPS"),e.NDR,"NDR"),e.AUD,"AUD")}}])}();function P(e,t){var r=new Uint8Array((0|e.byteLength)+(0|t.byteLength));return r.set(e,0),r.set(t,0|e.byteLength),r}function T(e){var t,r,n,i="";return t=Math.floor(e),(r=parseInt(t/3600,10)%24)>0&&(i+=(r<10?"0"+r:r)+":"),i+=((n=parseInt(t/60,10)%60)<10?"0"+n:n)+":"+((t=t<0?0:t%60)<10?"0"+t:t)}function L(e,t){if(e.length!==t.length)return!1;for(var r=0;r<e.length;r++)if(e[r]!==t[r])return!1;return!0}var _=function(e){function t(e,i,a){var s;return n(this,t),(s=r(this,t,["H264Remuxer"])).frameDuration=a,s.readyToDecode=!1,s.nextDts=0,s.dts=0,s.mp4track={id:E.getTrackID(),type:"video",len:0,fragmented:!0,sps:[],pps:[],fps:30,width:0,height:0,timescale:e,duration:i,samples:[]},s.samples=[],s.remainingData=new Uint8Array,s.kfCounter=0,s.pendingUnits={},s}return l(t,e),a(t,[{key:"resetTrack",value:function(){this.readyToDecode=!1,this.mp4track.sps=[],this.mp4track.pps=[],this.nextDts=0,this.dts=0,this.remainingData=new Uint8Array,this.kfCounter=0,this.pendingUnits={}}},{key:"feed",value:function(e,t,r){var n,i=arguments.length>3&&void 0!==arguments[3]&&arguments[3],a=[];e=P(this.remainingData,e);var s=f(x.extractNALu(e),2);return a=s[0],(n=s[1])?i?(a.push(n),this.remainingData=new Uint8Array):this.remainingData=n:this.remainingData=new Uint8Array,a.length>0?(this.remux(this.getVideoFrames(a,t,r)),!0):(k("Failed to extract any NAL units from video data:",n),this.dispatch("outOfData"),!1)}},{key:"getVideoFrames",value:function(e,t,r){var n,i=this,a=[],o=[],u=0,l=!1,c=!1;this.pendingUnits.units&&(a=this.pendingUnits.units,c=this.pendingUnits.vcl,l=this.pendingUnits.keyFrame,this.pendingUnits={});var d,f=s(e);try{for(f.s();!(d=f.n()).done;){var h=d.value,p=new C(h);this.parseNAL(p)&&(a.length&&c&&(p.isFirstSlice||!p.isVCL)&&(o.push({units:a,keyFrame:l}),a=[],l=!1,c=!1),a.push(p),l=l||p.isKeyframe,c=c||p.isVCL)}}catch(e){f.e(e)}finally{f.f()}if(a.length)if(t)if(c)o.push({units:a,keyFrame:l});else{var y=o.length-1;y>=0&&(o[y].units=o[y].units.concat(a))}else this.pendingUnits={units:a,keyFrame:l,vcl:c};return n=t?t/o.length|0:this.frameDuration,u=t?t-n*o.length:0,o.map(function(e){e.duration=n,e.compositionTimeOffset=r,u>0&&(e.duration++,u--),i.kfCounter++,e.keyFrame&&i.dispatch("keyframePosition",i.kfCounter*n/1e3)}),k("jmuxer: No. of H264 frames of the last chunk: ".concat(o.length)),o}},{key:"remux",value:function(e){var t,r=s(e);try{for(r.s();!(t=r.n()).done;){var n=t.value,i=n.units.reduce(function(e,t){return e+t.getSize()},0);n.units.length>0&&this.readyToDecode&&(this.mp4track.len+=i,this.samples.push({units:n.units,size:i,keyFrame:n.keyFrame,duration:n.duration,compositionTimeOffset:n.compositionTimeOffset}))}}catch(e){r.e(e)}finally{r.f()}}},{key:"getPayload",value:function(){if(!this.isReady())return null;var e,t,r=new Uint8Array(this.mp4track.len),n=0,i=this.mp4track.samples;for(this.dts=this.nextDts;this.samples.length;){var a=this.samples.shift(),o=a.units;if((t=a.duration)<=0)k("remuxer: invalid sample duration at DTS: ".concat(this.nextDts," :").concat(t)),this.mp4track.len-=a.size;else{this.nextDts+=t,e={size:a.size,duration:t,cts:a.compositionTimeOffset||0,flags:{isLeading:0,isDependedOn:0,hasRedundancy:0,degradPrio:0,isNonSync:a.keyFrame?0:1,dependsOn:a.keyFrame?2:1}};var u,l=s(o);try{for(l.s();!(u=l.n()).done;){var c=u.value;r.set(c.getData(),n),n+=c.getSize()}}catch(e){l.e(e)}finally{l.f()}i.push(e)}}return i.length?new Uint8Array(r.buffer,0,this.mp4track.len):null}},{key:"parseSPS",value:function(e){var t=x.readSPS(new Uint8Array(e));this.mp4track.fps=t.fps||this.mp4track.fps,this.mp4track.width=t.width,this.mp4track.height=t.height,this.mp4track.sps=[new Uint8Array(e)],this.mp4track.codec="avc1.";for(var r=new DataView(e.buffer,e.byteOffset+1,4),n=0;n<3;++n){var i=r.getUint8(n).toString(16);i.length<2&&(i="0"+i),this.mp4track.codec+=i}}},{key:"parsePPS",value:function(e){var t,r=s(this.mp4track.pps);try{for(r.s();!(t=r.n()).done;){if(L(t.value,e))return}}catch(e){r.e(e)}finally{r.f()}this.mp4track.pps.push(new Uint8Array(e))}},{key:"parseNAL",value:function(e){if(!e)return!1;if(e.isVCL)return!0;var t=!1;switch(e.type()){case C.PPS:this.parsePPS(e.getPayload()),t=!0;break;case C.SPS:this.mp4track.sps.length||this.parseSPS(e.getPayload()),t=!0;break;case C.AUD:k("AUD - ignoing");break;case C.SEI:k("SEI - ignoing")}return!this.readyToDecode&&this.mp4track.pps.length&&this.mp4track.sps.length&&(this.readyToDecode=!0),t}}])}(E),G=function(){return a(function e(){n(this,e)},null,[{key:"extractNALu",value:function(e){for(var t=0,r=e.byteLength,n=[],i=0,a=0;t<r;){var s=e[t++];if(0===s)a++;else if(1===s&&a>=2){var o=a+1;i!==t-o&&n.push(e.subarray(i,t-o)),i=t,a=0}else a=0}var u=null;return i<r&&(u=e.subarray(i,r)),[n,u]}},{key:"removeEmulationPreventionBytes",value:function(e){for(var t=[],r=0,n=0;n<e.length;n++){var i=e[n];2!==r||3!==i?(t.push(i),0===i?r++:r=0):r=0}return new Uint8Array(t)}},{key:"readSPS",value:function(e){var t=new D(e);t.readUByte(),t.readUByte(),t.readBits(4);var r=t.readBits(3);t.readBits(1);for(var n=t.readBits(2),i=t.readBits(1),a=t.readBits(5),s=t.readUInt(),o=new Uint8Array(6),u=0;u<6;u++)o[u]=t.readUByte();var l=t.readUByte();t.readUEG();var c=t.readUEG();3===c&&t.readBits(1);var d=t.readUEG(),f=t.readUEG(),h=0,p=0,y=0,v=0;t.readBoolean()&&(h=t.readUEG(),p=t.readUEG(),y=t.readUEG(),v=t.readUEG()),t.readUEG(),t.readUEG(),t.readUEG();for(var m=t.readBits(1)?0:r;m<=r;m++)t.readUEG(),t.readUEG(),t.readUEG();if((t.readUEG(),t.readUEG(),t.readUEG(),t.readUEG(),t.readUEG(),t.readUEG(),t.readBits(1))&&t.readBits(1))for(var g=0;g<4;g++)for(var k=0;k<(3===g?2:6);k++){if(t.readBits(1)){var b=Math.min(64,1<<4+(g<<1));g>1&&t.readEG();for(var U=0;U<b;U++)t.readEG()}else t.readUEG()}t.readBits(1),t.readBits(1),t.readBits(1)&&(t.readBits(4),t.readBits(4),t.readUEG(),t.readUEG(),t.readBits(1));for(var S=t.readUEG(),B=0;B<S;B++){var w=!1;if(0!==B&&(w=t.readBoolean()),w)t.readUEG(),t.readBits(1),t.readUEG();else{for(var E=t.readUEG(),A=t.readUEG(),x=0;x<E;x++)t.readUEG(),t.readBits(1);for(var C=0;C<A;C++)t.readUEG(),t.readBits(1)}}if(t.readBits(1))for(var P=t.readUEG(),T=0;T<P;T++)t.readUEG(),t.readBits(1);t.readBits(1),t.readBits(1);var L=null;if(t.readBoolean()){if(t.readBoolean())255===t.readUByte()&&(t.readUShort(),t.readUShort());if(t.readBoolean()&&t.readBoolean(),t.readBoolean())t.readBits(3),t.readBoolean(),t.readBoolean()&&(t.readUByte(),t.readUByte(),t.readUByte());if(t.readBoolean()&&(t.readUEG(),t.readUEG()),t.readBoolean(),t.readBoolean(),t.readBoolean(),t.readBoolean()&&(t.readUEG(),t.readUEG(),t.readUEG(),t.readUEG()),t.readBoolean()){var _=t.readUInt(),G=t.readUInt();if(t.readBoolean()&&t.readUEG(),t.readBoolean()){var I=!1,R=!1,O=!1;I=t.readBoolean(),R=t.readBoolean(),(I||R)&&((O=t.readBoolean())&&(t.readBits(8),t.readBits(5),t.readBits(1),t.readBits(5)),t.readBits(4),t.readBits(4),O&&t.readBits(4),t.readBits(5),t.readBits(5),t.readBits(5));for(var F=0;F<=r;F++){var M=!1,N=0;if(!!t.readBoolean()||t.readBoolean()?t.readUEG():M=t.readBoolean(),M||(N=t.readUEG()),I)for(var z=0;z<=N;z++)t.readUEG(),t.readUEG(),O&&(t.readUEG(),t.readUEG()),t.readBits(1);if(R)for(var j=0;j<=N;j++)t.readUEG(),t.readUEG(),O&&(t.readUEG(),t.readUEG()),t.readBits(1)}}_>0&&G>0&&(L=G/_)}t.readBoolean()&&(t.readBoolean(),t.readBoolean(),t.readBoolean(),t.readUEG(),t.readUEG(),t.readUEG(),t.readUEG(),t.readUEG())}return{width:d-(1===c||2===c?2:1)*(p+h),height:f-(1===c?2:1)*(y+v),profile_space:n,tier_flag:i,profile_idc:a,profile_compatibility_flags:s,constraint_indicator_flags:o,level_idc:l,chroma_format_idc:c,fps:L}}}])}(),I=function(){function e(t){n(this,e),this.payload=t,this.nalUnitType=(126&t[0])>>1,this.nuhLayerId=(1&t[0])<<5|(248&t[1])>>3,this.nuhTemporalIdPlus1=7&t[1],this._isFirstSlice=null,this._sliceType=null}return a(e,[{key:"toString",value:function(){return"".concat(e.TYPES[this.type()]||"UNKNOWN ("+this.type()+")",": Layer: ").concat(this.nuhLayerId,", Temporal Id: ").concat(this.nuhTemporalIdPlus1)}},{key:"type",value:function(){return this.nalUnitType}},{key:"isKeyframe",get:function(){return[e.IDR_W_RADL,e.IDR_N_LP,e.CRA].includes(this.nalUnitType)}},{key:"isVCL",get:function(){return this.nalUnitType<=31}},{key:"parseHeader",value:function(){var e=new D(this.getPayload());e.readUByte(),e.readUByte(),this._isFirstSlice=e.readBoolean(),this.isKeyframe&&e.readBits(1),e.readUEG(),this._sliceType=e.readUEG()}},{key:"isFirstSlice",get:function(){return this._isFirstSlice||this.parseHeader(),this._isFirstSlice}},{key:"sliceType",get:function(){return this._sliceType||this.parseHeader(),this._sliceType}},{key:"getPayload",value:function(){return this.payload}},{key:"getPayloadSize",value:function(){return this.payload.byteLength}},{key:"getSize",value:function(){return 4+this.getPayloadSize()}},{key:"getData",value:function(){var e=new Uint8Array(this.getSize());return new DataView(e.buffer).setUint32(0,this.getSize()-4),e.set(this.getPayload(),4),e}}],[{key:"TRAIL_N",get:function(){return 0}},{key:"TRAIL_R",get:function(){return 1}},{key:"IDR_W_RADL",get:function(){return 19}},{key:"IDR_N_LP",get:function(){return 20}},{key:"CRA",get:function(){return 21}},{key:"VPS",get:function(){return 32}},{key:"SPS",get:function(){return 33}},{key:"PPS",get:function(){return 34}},{key:"AUD",get:function(){return 35}},{key:"SEI",get:function(){return 39}},{key:"SEI2",get:function(){return 40}},{key:"TYPES",get:function(){var t;return o(o(o(o(o(o(o(o(o(o(t={},e.TRAIL_N,"TRAIL_N"),e.TRAIL_R,"TRAIL_R"),e.IDR_W_RADL,"IDR"),e.IDR_N_LP,"IDR2"),e.CRA,"CRA"),e.VPS,"VPS"),e.SPS,"SPS"),e.PPS,"PPS"),e.AUD,"AUD"),e.SEI,"SEI"),o(t,e.SEI2,"SEI2")}}])}(),R=function(e){function t(e,i,a){var s;return n(this,t),(s=r(this,t,["H264Remuxer"])).frameDuration=a,s.readyToDecode=!1,s.nextDts=0,s.dts=0,s.mp4track={id:E.getTrackID(),type:"video",len:0,fragmented:!0,vps:[],sps:[],pps:[],hvcC:{},fps:30,width:0,height:0,timescale:e,duration:i,samples:[]},s.samples=[],s.remainingData=new Uint8Array,s.kfCounter=0,s.pendingUnits={},s}return l(t,e),a(t,[{key:"resetTrack",value:function(){this.readyToDecode=!1,this.mp4track.vps=[],this.mp4track.sps=[],this.mp4track.pps=[],this.mp4track.hvcC={},this.nextDts=0,this.dts=0,this.remainingData=new Uint8Array,this.kfCounter=0,this.pendingUnits={}}},{key:"feed",value:function(e,t,r){var n,i=arguments.length>3&&void 0!==arguments[3]&&arguments[3],a=[];e=P(this.remainingData,e);var s=f(G.extractNALu(e),2);return a=s[0],(n=s[1])?i?(a.push(n),this.remainingData=new Uint8Array):this.remainingData=n:this.remainingData=new Uint8Array,a.length>0?(this.remux(this.getVideoFrames(a,t,r)),!0):(k("Failed to extract any NAL units from video data:",n),this.dispatch("outOfData"),!1)}},{key:"getVideoFrames",value:function(e,t,r){var n,i=this,a=[],o=[],u=0,l=!1,c=!1;this.pendingUnits.units&&(a=this.pendingUnits.units,c=this.pendingUnits.vcl,l=this.pendingUnits.keyFrame,this.pendingUnits={});var d,f=s(e);try{for(f.s();!(d=f.n()).done;){var h=d.value,p=new I(h);this.parseNAL(p)&&(a.length&&c&&(p.isFirstSlice||!p.isVCL)&&(o.push({units:a,keyFrame:l}),a=[],l=!1,c=!1),a.push(p),l=l||p.isKeyframe,c=c||p.isVCL)}}catch(e){f.e(e)}finally{f.f()}if(a.length)if(t)if(c)o.push({units:a,keyFrame:l});else{var y=o.length-1;y>=0&&(o[y].units=o[y].units.concat(a))}else this.pendingUnits={units:a,keyFrame:l,vcl:c};return n=t?t/o.length|0:this.frameDuration,u=t?t-n*o.length:0,o.map(function(e){e.duration=n,e.compositionTimeOffset=r,u>0&&(e.duration++,u--),i.kfCounter++,e.keyFrame&&i.dispatch("keyframePosition",i.kfCounter*n/1e3)}),k("jmuxer: No. of H265 frames of the last chunk: ".concat(o.length)),o}},{key:"remux",value:function(e){var t,r=s(e);try{for(r.s();!(t=r.n()).done;){var n=t.value,i=n.units.reduce(function(e,t){return e+t.getSize()},0);n.units.length>0&&this.readyToDecode&&(this.mp4track.len+=i,this.samples.push({units:n.units,size:i,keyFrame:n.keyFrame,duration:n.duration,compositionTimeOffset:n.compositionTimeOffset}))}}catch(e){r.e(e)}finally{r.f()}}},{key:"getPayload",value:function(){if(!this.isReady())return null;var e,t,r=new Uint8Array(this.mp4track.len),n=0,i=this.mp4track.samples;for(this.dts=this.nextDts;this.samples.length;){var a=this.samples.shift(),o=a.units;if((t=a.duration)<=0)k("remuxer: invalid sample duration at DTS: ".concat(this.nextDts," :").concat(t)),this.mp4track.len-=a.size;else{this.nextDts+=t,e={size:a.size,duration:t,cts:a.compositionTimeOffset||0,flags:{isLeading:0,isDependedOn:0,hasRedundancy:0,degradPrio:0,isNonSync:a.keyFrame?0:1,dependsOn:a.keyFrame?2:1}};var u,l=s(o);try{for(l.s();!(u=l.n()).done;){var c=u.value;r.set(c.getData(),n),n+=c.getSize()}}catch(e){l.e(e)}finally{l.f()}i.push(e)}}return i.length?new Uint8Array(r.buffer,0,this.mp4track.len):null}},{key:"parseSPS",value:function(e){this.mp4track.sps=[new Uint8Array(e)],e=G.removeEmulationPreventionBytes(e);var t=G.readSPS(new Uint8Array(e));this.mp4track.fps=t.fps||this.mp4track.fps,this.mp4track.width=t.width,this.mp4track.height=t.height,this.mp4track.codec="hvc1."+(t.profile_space?String.fromCharCode(64+t.profile_space):"")+t.profile_idc+"."+function(e){for(var t=0,r=0;r<32;r++)t<<=1,t|=1&e,e>>>=1;return t>>>0}(t.profile_compatibility_flags).toString(16)+"."+(t.tier_flag?"H":"L")+t.level_idc+"."+t.constraint_indicator_flags.map(function(e){return e.toString(16)}).join(".").toUpperCase().replace(/(?:\.0)+$/,""),this.mp4track.hvcC={profile_space:t.profile_space,tier_flag:t.tier_flag,profile_idc:t.profile_idc,profile_compatibility_flags:t.profile_compatibility_flags,constraint_indicator_flags:t.constraint_indicator_flags,level_idc:t.level_idc,chroma_format_idc:t.chroma_format_idc}}},{key:"parsePPS",value:function(e){var t,r=s(this.mp4track.pps);try{for(r.s();!(t=r.n()).done;){if(L(t.value,e))return}}catch(e){r.e(e)}finally{r.f()}this.mp4track.pps.push(new Uint8Array(e))}},{key:"parseVPS",value:function(e){this.mp4track.vps=[new Uint8Array(e)]}},{key:"parseNAL",value:function(e){if(!e)return!1;if(e.isVCL)return!0;var t=!1;switch(e.type()){case I.VPS:this.mp4track.vps.length||this.parseVPS(e.getPayload()),t=!0;break;case I.SPS:this.mp4track.sps.length||this.parseSPS(e.getPayload()),t=!0;break;case I.PPS:this.parsePPS(e.getPayload()),t=!0;break;case I.AUD:k("AUD - ignoing");break;case I.SEI:case I.SEI2:k("SEI - ignoing")}return!this.readyToDecode&&this.mp4track.vps.length&&this.mp4track.sps.length&&this.mp4track.pps.length&&(this.readyToDecode=!0),t}}])}(E),O=function(e){function t(e,i,a,s){var o;return n(this,t),(o=r(this,t,["remuxer"])).videoCodec=a,o.frameDuration=s,o.initialized=!1,o.tracks={},o.seq=1,o.env=e,o.timescale=1e3,o.mediaDuration=i?4294967295:0,o}return l(t,e),a(t,[{key:"addTrack",value:function(e){var t=this;if("video"!==e&&"both"!==e||("H265"==this.videoCodec?this.tracks.video=new R(this.timescale,this.mediaDuration,this.frameDuration):this.tracks.video=new _(this.timescale,this.mediaDuration,this.frameDuration),this.tracks.video.on("outOfData",function(){t.dispatch("missingVideoFrames")}),this.tracks.video.on("keyframePosition",function(e){t.dispatch("keyframePosition",e)})),"audio"===e||"both"===e){var r=new A(this.timescale,this.mediaDuration,this.frameDuration);this.tracks.audio=r,this.tracks.audio.on("outOfData",function(){t.dispatch("missingAudioFrames")})}}},{key:"reset",value:function(){for(var e in this.tracks)this.tracks[e].resetTrack();this.initialized=!1}},{key:"destroy",value:function(){this.tracks={},this.offAll()}},{key:"flush",value:function(){if(!this.initialized){if(!this.isReady())return;this.dispatch("ready"),this.initSegment(),this.initialized=!0}for(var e in this.tracks){var t=this.tracks[e],r=t.getPayload();if(r&&r.byteLength){var n={type:e,payload:P(S.moof(this.seq,t.dts,t.mp4track),S.mdat(r)),dts:t.dts};"video"===e&&(n.fps=t.mp4track.fps),this.dispatch("buffer",n);var i=T(t.dts/this.timescale);k("put segment (".concat(e,"): dts: ").concat(t.dts," frames: ").concat(t.mp4track.samples.length," second: ").concat(i)),t.flush(),this.seq++}}}},{key:"initSegment",value:function(){var e=[];for(var t in this.tracks){var r=this.tracks[t];if("browser"==this.env){var n={type:t,payload:S.initSegment([r.mp4track],this.mediaDuration,this.timescale)};this.dispatch("buffer",n)}else e.push(r.mp4track)}if("node"==this.env){var i={type:"all",payload:S.initSegment(e,this.mediaDuration,this.timescale)};this.dispatch("buffer",i)}k("Initial segment generated.")}},{key:"isReady",value:function(){for(var e in this.tracks)if(!this.tracks[e].readyToDecode||!this.tracks[e].samples.length)return!1;return!0}},{key:"feed",value:function(e){var t=!1;e.video&&this.tracks.video&&(t|=this.tracks.video.feed(e.video,e.duration,e.compositionTimeOffset,e.isLastVideoFrameComplete)),e.audio&&this.tracks.audio&&(t|=this.tracks.audio.feed(e.audio,e.duration)),t?this.flush():b("Input object must have video and/or audio property. Make sure it is a valid typed array")}}])}(U),F=function(e){function t(e,i){var a;return n(this,t),(a=r(this,t,["buffer"])).type=i,a.queue=new Uint8Array,a.cleaning=!1,a.pendingCleaning=0,a.cleanOffset=30,a.cleanRanges=[],a.sourceBuffer=e,a.sourceBuffer.addEventListener("updateend",function(){a.pendingCleaning>0&&(a.initCleanup(a.pendingCleaning),a.pendingCleaning=0),a.cleaning=!1,a.cleanRanges.length&&a.doCleanup()}),a.sourceBuffer.addEventListener("error",function(){a.dispatch("error",{type:a.type,name:"buffer",error:"buffer error"})}),a}return l(t,e),a(t,[{key:"destroy",value:function(){this.queue=null,this.sourceBuffer=null,this.offAll()}},{key:"doCleanup",value:function(){if(this.cleanRanges.length){var e=this.cleanRanges.shift();k("".concat(this.type," remove range [").concat(e[0]," - ").concat(e[1],")")),this.cleaning=!0,this.sourceBuffer.remove(e[0],e[1])}else this.cleaning=!1}},{key:"initCleanup",value:function(e){try{if(this.sourceBuffer.updating)return void(this.pendingCleaning=e);if(this.sourceBuffer.buffered&&this.sourceBuffer.buffered.length&&!this.cleaning){for(var t=0;t<this.sourceBuffer.buffered.length;++t){var r=this.sourceBuffer.buffered.start(t),n=this.sourceBuffer.buffered.end(t);e-r>this.cleanOffset&&r<(n=e-this.cleanOffset)&&this.cleanRanges.push([r,n])}this.doCleanup()}}catch(e){b("Error occured while cleaning ".concat(this.type," buffer - ").concat(e.name,": ").concat(e.message))}}},{key:"doAppend",value:function(){if(this.queue.length&&this.sourceBuffer&&!this.sourceBuffer.updating)try{this.sourceBuffer.appendBuffer(this.queue),this.queue=new Uint8Array}catch(t){var e="unexpectedError";"QuotaExceededError"===t.name?(k("".concat(this.type," buffer quota full")),e="QuotaExceeded"):(b("Error occured while appending ".concat(this.type," buffer - ").concat(t.name,": ").concat(t.message)),e="InvalidStateError"),this.dispatch("error",{type:this.type,name:e,error:"buffer error"})}}},{key:"feed",value:function(e){this.queue=P(this.queue,e)}}])}(U);return function(t){function i(e){var t;n(this,i),(t=r(this,i,["jmuxer"])).isReset=!1;var a={node:"",mode:"both",videoCodec:"H264",flushingTime:500,maxDelay:500,clearBuffer:!0,fps:30,readFpsFromTrack:!1,debug:!1,onReady:function(){},onData:function(){},onError:function(){},onUnsupportedCodec:function(){},onMissingVideoFrames:function(){},onMissingAudioFrames:function(){},onKeyframePosition:function(){},onLoggerLog:console.log,onLoggerErr:console.error};return t.options=Object.assign({},a,e),t.env="object"===("undefined"==typeof process?"undefined":y(process))&&"undefined"==typeof window?"node":"browser",t.options.debug&&function(e,t){m=e,g=t}(t.options.onLoggerLog,t.options.onLoggerErr),t.options.fps||(t.options.fps=30),t.frameDuration=1e3/t.options.fps|0,t.remuxController=new O(t.env,e.live,t.options.videoCodec,t.frameDuration),t.remuxController.addTrack(t.options.mode),t.initData(),t.remuxController.on("buffer",t.onBuffer.bind(t)),"browser"==t.env&&(t.remuxController.on("ready",t.createBuffer.bind(t)),t.initBrowser()),t.remuxController.on("missingVideoFrames",function(){"function"==typeof t.options.onMissingVideoFrames&&t.options.onMissingVideoFrames.call(null)}),t.remuxController.on("missingAudioFrames",function(){"function"==typeof t.options.onMissingAudioFrames&&t.options.onMissingAudioFrames.call(null)}),t.clearBuffer&&t.remuxController.on("keyframePosition",function(e){t.kfPosition.push(e)}),"function"==typeof t.options.onKeyframePosition&&t.remuxController.on("keyframePosition",function(e){t.options.onKeyframePosition.call(null,e)}),t}return l(i,t),a(i,[{key:"initData",value:function(){this.lastCleaningTime=Date.now(),this.kfPosition=[],this.pendingUnits={},this.remainingData=new Uint8Array,this.startInterval()}},{key:"initBrowser",value:function(){"string"==typeof this.options.node&&""==this.options.node&&b("no video element were found to render, provide a valid video element"),this.node="string"==typeof this.options.node?document.getElementById(this.options.node):this.options.node,this.mseReady=!1,this.setupMSE()}},{key:"createStream",value:function(){var t=this.feed.bind(this),r=this.destroy.bind(this);return this.stream=new e.Duplex({writableObjectMode:!0,read:function(e){},write:function(e,r,n){t(e),n()},final:function(e){r(),e()}}),this.stream}},{key:"setupMSE",value:function(){if(window.MediaSource=window.MediaSource||window.WebKitMediaSource||window.ManagedMediaSource,!window.MediaSource)throw"Oops! Browser does not support Media Source Extension or Managed Media Source (IOS 17+).";if(this.isMSESupported=!!window.MediaSource,this.mediaSource=new window.MediaSource,this.url=URL.createObjectURL(this.mediaSource),window.MediaSource===window.ManagedMediaSource)try{this.node.removeAttribute("src"),this.node.disableRemotePlayback=!0;var e=document.createElement("source");e.type="video/mp4",e.src=this.url,this.node.appendChild(e),this.node.load()}catch(e){this.node.src=this.url}else this.node.src=this.url;this.mseEnded=!1,this.mediaSource.addEventListener("sourceopen",this.onMSEOpen.bind(this)),this.mediaSource.addEventListener("sourceclose",this.onMSEClose.bind(this)),this.mediaSource.addEventListener("webkitsourceopen",this.onMSEOpen.bind(this)),this.mediaSource.addEventListener("webkitsourceclose",this.onMSEClose.bind(this))}},{key:"endMSE",value:function(){if(!this.mseEnded)try{this.mseEnded=!0,this.mediaSource.endOfStream()}catch(e){b("mediasource is not available to end")}}},{key:"feed",value:function(e){e&&this.remuxController&&(e.duration=e.duration?parseInt(e.duration):0,this.remuxController.feed(e))}},{key:"destroy",value:function(){if(this.stopInterval(),this.stream&&(this.remuxController.flush(),this.stream.push(null),this.stream=null),this.remuxController&&(this.remuxController.destroy(),this.remuxController=null),this.bufferControllers){for(var e in this.bufferControllers)this.bufferControllers[e].destroy();this.bufferControllers=null,this.endMSE()}this.node=!1,this.mseReady=!1,this.videoStarted=!1,this.mediaSource=null}},{key:"reset",value:function(){if(this.stopInterval(),this.isReset=!0,this.node.pause(),this.remuxController&&this.remuxController.reset(),this.bufferControllers){for(var e in this.bufferControllers)this.bufferControllers[e].destroy();this.bufferControllers=null,this.endMSE()}this.initData(),"browser"==this.env&&this.initBrowser(),k("JMuxer was reset")}},{key:"createBuffer",value:function(){if(this.mseReady&&this.remuxController&&this.remuxController.isReady()&&!this.bufferControllers)for(var e in this.bufferControllers={},this.remuxController.tracks){var t=this.remuxController.tracks[e];if(!i.isSupported("".concat(e,'/mp4; codecs="').concat(t.mp4track.codec,'"')))return b("Browser does not support codec: ".concat(e,'/mp4; codecs="').concat(t.mp4track.codec,'"')),"function"==typeof this.options.onUnsupportedCodec&&this.options.onUnsupportedCodec.call(null,t.mp4track.codec),!1;var r=this.mediaSource.addSourceBuffer("".concat(e,'/mp4; codecs="').concat(t.mp4track.codec,'"'));this.bufferControllers[e]=new F(r,e),this.bufferControllers[e].on("error",this.onBufferError.bind(this))}}},{key:"startInterval",value:function(){var e=this;this.interval=setInterval(function(){e.options.flushingTime?e.applyAndClearBuffer():e.bufferControllers&&e.cancelDelay()},this.options.flushingTime||1e3)}},{key:"stopInterval",value:function(){this.interval&&clearInterval(this.interval)}},{key:"cancelDelay",value:function(){if(this.node.buffered&&this.node.buffered.length>0&&!this.node.seeking){var e=this.node.buffered.end(0);e-this.node.currentTime>this.options.maxDelay/1e3&&(k("delay"),this.node.paused&&this.node.play().catch(b),this.node.currentTime=e-.001)}}},{key:"releaseBuffer",value:function(){for(var e in this.bufferControllers)this.bufferControllers[e].doAppend()}},{key:"applyAndClearBuffer",value:function(){this.bufferControllers&&(this.releaseBuffer(),this.clearBuffer())}},{key:"getSafeClearOffsetOfBuffer",value:function(e){for(var t,r="audio"===this.options.mode&&e||0,n=0;n<this.kfPosition.length&&!(this.kfPosition[n]>=e);n++)t=this.kfPosition[n];return t&&(this.kfPosition=this.kfPosition.filter(function(e){return e<t&&(r=e),e>=t})),r}},{key:"clearBuffer",value:function(){if(this.options.clearBuffer&&Date.now()-this.lastCleaningTime>1e4){for(var e in this.bufferControllers){var t=this.getSafeClearOffsetOfBuffer(this.node.currentTime);this.bufferControllers[e].initCleanup(t)}this.lastCleaningTime=Date.now()}}},{key:"onBuffer",value:function(e){this.options.readFpsFromTrack&&void 0!==e.fps&&this.options.fps!=e.fps&&(this.options.fps=e.fps,this.frameDuration=Math.ceil(1e3/e.fps),k("JMuxer changed FPS to ".concat(e.fps," from track data"))),"browser"==this.env?this.bufferControllers&&this.bufferControllers[e.type]&&this.bufferControllers[e.type].feed(e.payload):this.stream&&this.stream.push(e.payload),this.options.onData&&this.options.onData(e.payload),0===this.options.flushingTime&&this.applyAndClearBuffer()}},{key:"onMSEOpen",value:function(){this.mseReady=!0,URL.revokeObjectURL(this.url),"function"==typeof this.options.onReady&&this.options.onReady.call(null,this.isReset,this.mediaSource)}},{key:"onMSEClose",value:function(){this.mseReady=!1,this.videoStarted=!1}},{key:"onBufferError",value:function(e){if("QuotaExceeded"==e.name)return k("JMuxer cleaning ".concat(e.type," buffer due to QuotaExceeded error")),void this.bufferControllers[e.type].initCleanup(this.node.currentTime);"InvalidStateError"==e.name?(k("JMuxer is reseting due to InvalidStateError"),this.reset()):this.endMSE(),"function"==typeof this.options.onError&&this.options.onError.call(null,e)}}],[{key:"isSupported",value:function(e){return window.MediaSource&&window.MediaSource.isTypeSupported(e)}}])}(U)});
+
+</script>
 </head>
 <body>
 
@@ -413,33 +878,51 @@
 <div class="viewport-canvas" id="viewportCanvas">
   <img id="carplayScreen" class="screen-img" alt="CarPlay Viewport Stream" src="/stream" draggable="false">
   <canvas id="carplayVideoCanvas" class="screen-img" style="display: none; position: absolute; inset: 0; margin: auto;" draggable="false"></canvas>
+  <canvas id="carplayBroadwayCanvas" class="screen-img" style="display: none; position: absolute; inset: 0; margin: auto;" draggable="false"></canvas>
+    <video id="carplayVideoTag" class="screen-img" style="display: none; position: absolute; inset: 0; margin: auto; object-fit: contain; pointer-events: none;" autoplay playsinline muted></video>
   <div id="touchFeedback0" class="touch-ripple ripple-0" style="display: none;"></div>
   <div id="touchFeedback1" class="touch-ripple ripple-1" style="display: none;"></div>
   <div id="emptyOverlay" class="overlay-empty">
     <div class="spinner"></div>
     <h3 style="font-size: 1.25rem; font-weight: 600;">正在加载 CarPlay 投屏...</h3>
     <p style="color: var(--text-secondary); font-size: 0.9rem; max-width: 420px;">
-      请确认 iPhone 已连接并在车机/手机端开启 CarPlay。画面将优先自适应填充当前浏览器窗口。
+      请确认 iPhone 已连接车载 Wi-Fi。如果服务刚重启或未唤醒，可点击下方按钮一键后台蓝牙唤醒。
     </p>
+    <div style="margin-top: 14px; display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;">
+      <button id="btnWakePhone" style="background: var(--accent); color: white; border: none; padding: 8px 18px; border-radius: 9999px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 14px rgba(59,130,246,0.4); display: flex; align-items: center; gap: 6px; transition: transform 0.15s ease;">
+        <span>📱 唤醒 iPhone 重连</span>
+      </button>
+      <button id="btnSoftReset" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 18px; border-radius: 9999px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: transform 0.15s ease;" title="无需重启树莓派，从 0 深度复位蓝牙芯片与 AirPlay 协议栈">
+        <span>⚡ 0状态重启投屏</span>
+      </button>
+    </div>
   </div>
 </div>
 
 <!-- Floating Pill Header -->
 <div class="floating-header">
-  <div class="brand-chip">
+  <div class="brand-chip" title="DiPlay - 树莓派 CarPlay 车载投屏系统">
     <div class="brand-logo">D</div>
-    <span>DiPlay Web Remote</span>
+    <span class="brand-title">DiPlay</span>
   </div>
-  <div id="statusBadge" class="status-chip idle">
+  <div id="statusBadge" class="status-chip idle clickable" title="点击切换：方案A硬件流 / 方案B行车防黑屏Canvas镜像">
     <span class="status-dot"></span>
     <span id="statusText">等待连接</span>
   </div>
-  <div class="meta-tag" id="tagNetwork" style="color: #38bdf8; border-color: rgba(56, 189, 248, 0.3);">⚡ WS 极速已连</div>
-  <div class="meta-tag" id="tagResolution">-- × --</div>
-  <div class="meta-tag" id="tagFpsLatency">FPS: -- · -- ms</div>
+  <div class="meta-tag clickable" id="tagHardware" title="树莓派硬件占用 (CPU / 温度 / 内存)">
+    <span id="hwIcon">🖥️</span>
+    <span id="hwText">CPU: --% · --°C</span>
+  </div>
+  <div class="meta-tag clickable" id="tagNetDiag" title="点击查看网络码率、Wi-Fi 频段与拥塞丢帧诊断">
+    <span id="netDiagIcon">📡</span>
+    <span id="netDiagText">-- Mbps · 5G</span>
+  </div>
+  <div class="meta-tag clickable" id="tagResolution" title="点击切换投屏分辨率与视口填充模式">-- × --</div>
+  <div class="meta-tag" id="tagFpsLatency" title="画面实时渲染帧率">-- FPS</div>
   <div class="header-actions">
     <button class="icon-btn" id="btnSnapshot" title="保存当前画面高清快照">📸</button>
     <button class="icon-btn" id="btnFullscreen" title="切换浏览器全屏">⛶</button>
+    <button class="icon-btn" id="btnToggleImmersive" title="进入沉浸式模式 (隐藏菜单栏与状态条，按 H 键恢复)">👁️</button>
   </div>
 </div>
 
@@ -450,23 +933,43 @@
   <span style="cursor: pointer; opacity: 0.7;" onclick="document.getElementById('aspectHint').style.display='none'">✕</span>
 </div>
 
-<!-- Resolution Picker Popover -->
-<div class="res-popover" id="resPopover">
+<!-- Resolution Picker & Display Fit Popover -->
+<div class="res-popover" id="resPopover" style="width: 350px;">
   <div class="res-popover-title">
-    <span>CarPlay 协商分辨率</span>
+    <span>🖥️ 画面尺寸与填充模式</span>
     <span style="cursor: pointer;" id="btnClosePopover">✕</span>
   </div>
-  <div class="res-list">
+
+  <div style="font-size: 0.78rem; font-weight: 600; color: #94a3b8; margin-bottom: 6px; padding: 0 2px;">
+    1. 页面视口填充（即时改变画面占屏大小）：
+  </div>
+  <div class="fit-mode-group">
+    <button class="fit-mode-btn active" id="btnFitContain" data-fit="contain" title="保持苹果官方原生比例，上下或左右留黑边">
+      <span>📐</span> 等比居中
+    </button>
+    <button class="fit-mode-btn" id="btnFitFill" data-fit="fill" title="拉伸撑满整个屏幕，彻底消除黑边">
+      <span>↔️</span> 全屏铺满
+    </button>
+    <button class="fit-mode-btn" id="btnFitCover" data-fit="cover" title="等比撑满屏幕，无黑边">
+      <span>🔍</span> 等比裁切
+    </button>
+  </div>
+
+  <div style="font-size: 0.78rem; font-weight: 600; color: #94a3b8; margin-bottom: 6px; padding: 0 2px; display: flex; justify-content: space-between;">
+    <span>2. iPhone 物理流协商（视频编码点数）：</span>
+    <span id="currentStreamTag" style="color: #38bdf8; font-weight: 700;">-- × --</span>
+  </div>
+  <div class="res-list" id="resListContainer">
     <div class="res-item" data-w="auto" data-h="auto" id="optAutoFit">
       <span>⚡ 适配当前浏览器视口</span>
       <span class="res-badge" id="autoFitDimensions">自适应</span>
     </div>
     <div class="res-item" data-w="1920" data-h="1080">
-      <span>🖥️ 1080P 宽屏 (16:9)</span>
+      <span>🖥️ 1080P 宽屏 (16:9 原画)</span>
       <span class="res-badge">1920×1080</span>
     </div>
     <div class="res-item" data-w="1280" data-h="720">
-      <span>🚀 720P 极速宽屏 (16:9)</span>
+      <span>🚀 720P 极速宽屏 (16:9 满帧流畅)</span>
       <span class="res-badge">1280×720</span>
     </div>
     <div class="res-item" data-w="1920" data-h="720">
@@ -474,7 +977,7 @@
       <span class="res-badge">1920×720</span>
     </div>
     <div class="res-item" data-w="1024" data-h="768">
-      <span>📐 经典中控 (4:3)</span>
+      <span>📐 经典中控方屏 (4:3)</span>
       <span class="res-badge">1024×768</span>
     </div>
     <div class="res-item" data-w="native" data-h="native">
@@ -482,41 +985,317 @@
       <span class="res-badge">跟随车机/手机</span>
     </div>
   </div>
+
+  <div style="margin-top: 10px; padding: 8px; background: rgba(59, 130, 246, 0.08); border-radius: 8px; border: 1px solid rgba(59, 130, 246, 0.2); font-size: 0.74rem; color: #93c5fd; line-height: 1.45;">
+    💡 <b>尺寸说明</b>：1080P 与 720P 比例同为 16:9，画面等比缩放后占屏大小相同。若想让画面填满屏幕请直接切换上方【全屏铺满】；若选择新分辨率，可点击下方【立即重连生效】。
+  </div>
+
+  <div style="display: flex; gap: 8px; margin-top: 10px;">
+    <button id="btnSaveResOnly" style="flex: 1; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: var(--text-primary); border-radius: 8px; padding: 7px 0; font-size: 0.78rem; font-weight: 600; cursor: pointer;">
+      💾 仅保存配置
+    </button>
+    <button id="btnApplyAndReconnect" style="flex: 1.2; background: linear-gradient(135deg, #2563eb, #3b82f6); border: none; color: white; border-radius: 8px; padding: 7px 0; font-size: 0.78rem; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(37,99,235,0.3);">
+      ⚡ 立即重连生效
+    </button>
+  </div>
 </div>
 
-<!-- Floating Action Dock -->
-<div class="control-dock" id="controlDock">
-  <button class="dock-btn home-btn" id="btnHome" title="CarPlay 主屏幕">
-    <span>🏠</span> 主屏幕
-  </button>
-  <button class="dock-btn siri-btn" id="btnSiri" title="唤醒 Siri 语音">
-    <span>🎙️</span> Siri
-  </button>
-  <div class="dock-divider"></div>
-  <button class="dock-btn" id="btnPrev" title="上一曲">
-    <span>⏮️</span>
-  </button>
-  <button class="dock-btn" id="btnPlayPause" title="播放 / 暂停">
-    <span>⏯️</span>
-  </button>
-  <button class="dock-btn" id="btnNext" title="下一曲">
-    <span>⏭️</span>
-  </button>
-  <div class="dock-divider"></div>
-  <button class="dock-btn" id="btnAudio" title="CarPlay 声音输出至网页 (点击切换静音/播放)">
-    <span>🔊</span> <span id="labelAudio">网页声音</span>
-  </button>
-  <button class="dock-btn" id="btnMic" title="网页麦克风输入给 CarPlay">
-    <span>🎙️</span> <span id="labelMic">网页麦克风</span>
-  </button>
-  <div class="dock-divider"></div>
-  <button class="dock-btn" id="btnToggleRes" title="切换投屏分辨率以适配浏览器">
-    <span>🖥️</span> <span id="labelResBtn">画面尺寸</span>
-  </button>
-  <button class="dock-btn" id="btnQuality" title="画质调节 (点击切换流畅/超清/极限)">
-    <span>💎</span> <span id="qualityLabel">画质: 原画超清 (90% 推荐)</span>
-  </button>
+<!-- Touch Calibration Popover -->
+<div class="res-popover" id="calibPopover" style="width: 320px;">
+  <div class="res-popover-title">
+    <span>🎯 3.5" 电阻触控纠偏与校准</span>
+    <span style="cursor: pointer;" id="btnCloseCalibPopover">✕</span>
+  </div>
+  <div class="res-list">
+    <div class="res-item" id="btnTriggerScreenCalib" style="border-left: 3px solid #3b82f6;">
+      <div>
+        <div style="font-weight: 600; font-size: 0.88rem;">🎯 启动屏幕 4点校准向导</div>
+        <div style="font-size: 0.72rem; color: #9ca3af;">在树莓派小屏幕上依次点击四个角落靶心</div>
+      </div>
+    </div>
+    <div class="res-item" id="btnToggleTouchOrient" style="border-left: 3px solid #f59e0b;">
+      <div>
+        <div style="font-weight: 600; font-size: 0.88rem;">🔄 快速切换方向/翻转</div>
+        <div style="font-size: 0.72rem; color: #9ca3af;">当前: <span id="curOrientName" style="color: #60a5fa;">标准横屏 (已验证)</span></div>
+      </div>
+    </div>
+    <div class="res-item" id="btnResetGoldenTouch" style="border-left: 3px solid #10b981;">
+      <div>
+        <div style="font-weight: 600; font-size: 0.88rem;">⚡ 恢复官方黄金校准</div>
+        <div style="font-size: 0.72rem; color: #9ca3af;">清除自定义微调，恢复标准仿射矩阵</div>
+      </div>
+    </div>
+    <div class="res-item" id="btnExitScreenCalib" style="border-left: 3px solid #ef4444;">
+      <div>
+        <div style="font-weight: 600; font-size: 0.88rem;">❌ 退出屏幕校准向导</div>
+        <div style="font-size: 0.72rem; color: #9ca3af;">如果在校准界面误触，点击立即返回主控制面板</div>
+      </div>
+    </div>
+  </div>
+  <div style="margin-top: 10px; background: rgba(0,0,0,0.4); border-radius: 8px; padding: 8px 10px; font-size: 0.75rem; font-family: monospace; color: #a1a1aa; border: 1px solid rgba(255,255,255,0.06);">
+    <div style="color: #6ee7b7; font-weight: 600; margin-bottom: 2px;">触控实时检测:</div>
+    <div id="liveTouchCoord">请按压树莓派屏幕测试物理坐标...</div>
+  </div>
 </div>
+
+<!-- Wi-Fi & Hotspot Network Manager Popover -->
+<div class="res-popover" id="wifiPopover" style="width: 390px; max-width: 92vw; max-height: 82vh; overflow-y: auto;">
+  <div class="res-popover-title">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span style="font-size: 1.15rem;">📶</span>
+      <span style="font-weight: 700; color: #fff; font-size: 0.95rem;">网络模式与 Wi-Fi 管理</span>
+    </div>
+    <span style="cursor: pointer; font-size: 1.1rem; padding: 2px 6px;" id="btnCloseWifiPopover">✕</span>
+  </div>
+
+  <!-- Current Status Overview Card -->
+  <div class="wifi-card" style="margin-bottom: 12px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+      <span style="font-size: 0.78rem; color: #94a3b8; font-weight: 600;">当前运行模式</span>
+      <span id="wifiModeBadge" class="status-chip" style="font-size: 0.72rem; padding: 3px 9px;">
+        <span class="status-dot"></span> <span id="wifiModeText">检测中...</span>
+      </span>
+    </div>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+      <span style="font-size: 0.76rem; color: #94a3b8;">网络名称 (SSID)</span>
+      <span id="wifiCurrentSsid" style="font-weight: 600; font-size: 0.85rem; color: #f8fafc;">--</span>
+    </div>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+      <span style="font-size: 0.76rem; color: #94a3b8;">设备访问 IP</span>
+      <span id="wifiCurrentIp" style="font-weight: 700; font-family: monospace; font-size: 0.9rem; color: #38bdf8;">--</span>
+    </div>
+
+    <!-- Coexistence Architecture Hint -->
+    <div id="wifiCoexistHint" style="margin-top: 6px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.08); font-size: 0.72rem; line-height: 1.45; color: #cbd5e1;">
+      <!-- Dynamic text injected by JS based on multi_radio -->
+    </div>
+  </div>
+
+  <!-- Mode Switcher Quick Actions -->
+  <div style="font-size: 0.78rem; color: #94a3b8; font-weight: 700; margin-bottom: 6px; padding: 0 2px;">
+    🚀 一键快速模式切换
+  </div>
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px;">
+    <button class="wifi-action-btn" id="btnSwitchToAP" style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.45); color: #93c5fd; padding: 10px 8px; border-radius: 10px; cursor: pointer; text-align: left; font-size: 0.78rem;">
+      <div style="font-weight: 700; font-size: 0.84rem; color: #fff; margin-bottom: 3px;">🚗 车载 5G 热点</div>
+      <div style="color: #93c5fd; opacity: 0.9; font-size: 0.7rem; line-height: 1.3;">广播 Tesla-CarPlay (149信道/100.96.0.1) 专供车机与手机投屏</div>
+    </button>
+    <button class="wifi-action-btn" id="btnSwitchToSTA" style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.45); color: #6ee7b7; padding: 10px 8px; border-radius: 10px; cursor: pointer; text-align: left; font-size: 0.78rem;">
+      <div style="font-weight: 700; font-size: 0.84rem; color: #fff; margin-bottom: 3px;">🏠 已保存 Wi-Fi</div>
+      <div style="color: #6ee7b7; opacity: 0.9; font-size: 0.7rem; line-height: 1.3;">连接家庭/手机路由网络，融入局域网</div>
+    </button>
+  </div>
+
+  <!-- Scan & Connect Wi-Fi Section -->
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding: 0 2px;">
+    <span style="font-size: 0.78rem; color: #94a3b8; font-weight: 700;">🔍 周围 Wi-Fi 列表</span>
+    <button id="btnScanWifi" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #e2e8f0; font-size: 0.75rem; padding: 3px 10px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+      <span id="scanWifiIcon">🔄</span> 扫描刷新
+    </button>
+  </div>
+
+  <div id="wifiListContainer" style="display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; padding-right: 2px;">
+    <div style="text-align: center; padding: 18px 0; color: #64748b; font-size: 0.8rem;">
+      点击【扫描刷新】查找周围可用 Wi-Fi...
+    </div>
+  </div>
+
+  <!-- Connect Dialog In-place Form -->
+  <div id="wifiConnectForm" style="display: none; margin-top: 10px; background: rgba(30, 41, 59, 0.9); border: 1px solid rgba(59, 130, 246, 0.6); border-radius: 10px; padding: 12px;">
+    <div style="font-size: 0.82rem; font-weight: 700; color: #fff; margin-bottom: 8px;">
+      连接到: <span id="targetSsidLabel" style="color: #60a5fa;">--</span>
+    </div>
+    <input type="password" id="inputWifiPassword" placeholder="请输入 Wi-Fi 密码 (无密码留空)" style="width: 100%; box-sizing: border-box; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff; padding: 8px 10px; font-size: 0.82rem; margin-bottom: 10px; outline: none;">
+    <div style="display: flex; justify-content: flex-end; gap: 8px;">
+      <button id="btnCancelConnect" style="background: rgba(255,255,255,0.1); border: none; color: #cbd5e1; padding: 5px 12px; border-radius: 6px; font-size: 0.78rem; cursor: pointer;">取消</button>
+      <button id="btnConfirmConnect" style="background: #3b82f6; border: none; color: #fff; font-weight: 600; padding: 5px 14px; border-radius: 6px; font-size: 0.78rem; cursor: pointer;">确认连接</button>
+    </div>
+    <div style="font-size: 0.7rem; color: #fbbf24; margin-top: 8px; line-height: 1.35;">
+      🛡️ 保护机制：若连接失败或 20 秒未获取到有效 IP，系统将自动回退恢复 Tesla-CarPlay 车载热点，确保永远可通过 100.96.0.1 连回设备。
+    </div>
+  </div>
+
+  <!-- Notification Toast inside Popover -->
+  <div id="wifiNoticeToast" style="display: none; margin-top: 10px; padding: 8px 12px; border-radius: 8px; font-size: 0.76rem; background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; color: #6ee7b7; line-height: 1.4;">
+  </div>
+</div>
+
+<!-- Tesla Driving Anti-Blackout Stream Mode Popover -->
+<div class="res-popover" id="streamModePopover" style="width: 350px;">
+  <div class="res-popover-title">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span style="font-size: 1.15rem;">⚡</span>
+      <span style="font-weight: 700; color: #fff; font-size: 0.92rem;">画面渲染与行车防黑屏模式</span>
+    </div>
+    <span style="cursor: pointer; font-size: 1.1rem; padding: 2px 6px;" id="btnCloseStreamModePopover">✕</span>
+  </div>
+  <div class="res-list">
+    <div class="res-item current" id="btnSelectPlanA" style="border-left: 3px solid #38bdf8; cursor: pointer;">
+      <div style="width: 100%;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="font-weight: 700; font-size: 0.88rem; color: #38bdf8;">⚡ 方案 A：Canvas 原生直出 (推荐 · 挂 D 档行车防暂停/防黑屏)</div>
+          <span class="mode-check" id="checkPlanA" style="font-size: 0.95rem; color: #38bdf8; font-weight: 800;">✓</span>
+        </div>
+        <div style="font-size: 0.73rem; color: #94a3b8; margin-top: 4px; line-height: 1.45;">
+          直接在 Canvas 画布上渲染（离线环境自动启用高性能 WebGL 软解，HTTPS 环境启用 WebCodecs 硬解），<b>页面彻底无 &lt;video&gt; 媒体标签</b>，特斯拉车机挂入 D 档行车绝不暂停、不黑屏！纯离线 HTTP 完美运行。
+        </div>
+      </div>
+    </div>
+    <div class="res-item" id="btnSelectPlanB" style="border-left: 3px solid #10b981; cursor: pointer;">
+      <div style="width: 100%;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="font-weight: 700; font-size: 0.88rem; color: #10b981;">🎬 方案 B：Video 标签流 (MSE / 驻车备用)</div>
+          <span class="mode-check" id="checkPlanB" style="font-size: 0.95rem; color: #10b981; font-weight: 800; display: none;">✓</span>
+        </div>
+        <div style="font-size: 0.73rem; color: #94a3b8; margin-top: 4px; line-height: 1.45;">
+          基于 HTML5 &lt;video&gt; 媒体标签与 MediaSource 扩展播放（注意：特斯拉车机安全策略在 D 档行驶时会暂停该流）。
+        </div>
+      </div>
+    </div>
+  </div>
+  <div style="margin-top: 10px; background: rgba(0,0,0,0.38); border-radius: 8px; padding: 8px 10px; font-size: 0.73rem; color: #cbd5e1; line-height: 1.45; border: 1px solid rgba(255,255,255,0.06);">
+    💡 <b>离线行车防卡死提示</b>：特斯拉车机会拦截本地自签 HTTPS，请直接在车机浏览器输入 <b>http://100.96.0.1</b>（纯 HTTP）访问！方案 A 会自动以 WebGL 离线软解驱动 Canvas，彻底解决 D 档黑屏！(在特斯拉车机 WiFi 设置中请务必勾选「行驶中保持连接」)。
+  </div>
+</div>
+
+<!-- Floating Action Dock - Streamlined & Pro Cockpit Style -->
+<div class="control-dock" id="controlDock">
+  <!-- Core Navigation -->
+  <div class="dock-group">
+    <button class="dock-btn home-btn" id="btnHome" title="CarPlay 主屏幕 (按键盘 H 键)">
+      <span>🏠</span> <span>主屏</span>
+    </button>
+    <button class="dock-btn siri-btn" id="btnSiri" title="唤醒 Siri 语音">
+      <span>🎙️</span> <span>Siri</span>
+    </button>
+  </div>
+
+  <div class="dock-divider"></div>
+
+  <!-- Media Controls (Compact Segmented Pill) -->
+  <div class="dock-group media-cluster">
+    <button class="dock-btn icon-only" id="btnPrev" title="上一曲">⏮</button>
+    <button class="dock-btn icon-only play-btn" id="btnPlayPause" title="播放 / 暂停">⏯</button>
+    <button class="dock-btn icon-only" id="btnNext" title="下一曲">⏭</button>
+  </div>
+
+  <div class="dock-divider"></div>
+
+  <!-- Display & Audio -->
+  <div class="dock-group">
+    <button class="dock-btn" id="btnToggleRes" title="切换投屏分辨率与画面填充模式">
+      <span>🖥️</span> <span id="labelResBtn">画幅</span>
+    </button>
+    <button class="dock-btn" id="btnStreamMode" title="切换特斯拉行车防黑屏渲染模式 (方案A: H.264 Canvas / 方案B: 极速图片流)">
+      <span id="iconStreamMode">⚡</span> <span id="labelStreamMode">模式</span>
+    </button>
+    <button class="dock-btn" id="btnAudio" title="CarPlay 声音输出至网页 (点击切换静音/播放)">
+      <span>🔊</span> <span id="labelAudio">声音</span>
+    </button>
+  </div>
+
+  <div class="dock-divider"></div>
+
+  <!-- Diagnostics & Actions -->
+  <div class="dock-group">
+    <button class="dock-btn" id="btnTerminal" title="系统终端 & 诊断控制台 (查看运行日志与执行 Shell 指令)">
+      <span>💻</span> <span id="labelTerminalBtn">终端</span>
+    </button>
+    <button class="dock-btn" id="btnDockReconnect" title="触发后台蓝牙自动唤醒并重新连接 iPhone CarPlay">
+      <span>🔄</span> <span>重连</span>
+    </button>
+    <button class="dock-btn icon-only" id="btnDockImmersive" title="进入沉浸式模式 (隐藏控制栏，按 H 键恢复)">
+      <span>👁️</span>
+    </button>
+  </div>
+</div>
+
+<!-- Built-in Web Terminal & Diagnostic Console Modal -->
+<div class="terminal-modal" id="terminalModal">
+  <div class="terminal-header">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <div class="term-win-dots">
+        <span class="win-dot red"></span>
+        <span class="win-dot yellow"></span>
+        <span class="win-dot green"></span>
+      </div>
+      <span style="font-weight: 700; font-size: 0.88rem; color: #f8fafc; margin-left: 4px;">系统诊断与控制台</span>
+      <span class="term-status-badge" id="termStatusBadge">在线</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <button class="term-tool-btn" id="termBtnClear" title="清空输出">🧹 清屏</button>
+      <button class="term-tool-btn" id="termBtnCopy" title="复制终端内容">📋 复制</button>
+      <button class="term-tool-btn" id="termBtnExportQr" style="background: rgba(56, 189, 248, 0.2); border: 1px solid #38bdf8; color: #38bdf8; font-weight: 700; display: flex; align-items: center; gap: 4px;" title="生成二维码供手机或电脑扫码下载全部日志文件">📱 扫码下载日志</button>
+      <label style="display: flex; align-items: center; gap: 4px; font-size: 0.74rem; color: #94a3b8; cursor: pointer;">
+        <input type="checkbox" id="termAutoScroll" checked style="cursor: pointer;"> 滚动到底
+      </label>
+      <button class="term-close-btn" id="termBtnClose" title="关闭窗口">✕</button>
+    </div>
+  </div>
+
+  <!-- Quick Action Chips -->
+  <div class="term-quick-bar">
+    <button class="term-chip-btn" data-cmd="journalctl -u diplay-airplay -n 60 --no-pager">📡 AirPlay 日志</button>
+    <button class="term-chip-btn" data-cmd="journalctl -u diplay-pi -n 60 --no-pager">🖥️ Web 服务日志</button>
+    <button class="term-chip-btn" data-cmd="journalctl -u diplay-iap2 -n 40 --no-pager">⚡ iAP2 配对日志</button>
+    <button class="term-chip-btn" data-cmd="journalctl -u diplay-bt -n 40 --no-pager">📶 蓝牙守护日志</button>
+    <button class="term-chip-btn" data-cmd="sudo bash /opt/diplay/scripts/soft_reset.sh" style="border-color: #38bdf8; color: #38bdf8; font-weight: 700;">⚡ 0状态深度重启投屏 (免重启树莓派)</button>
+    <button class="term-chip-btn" data-cmd="iw dev wlan0 info; ip -s link show wlan0">📶 Wi-Fi 频段与吞吐</button>
+    <button class="term-chip-btn" data-cmd="uptime; free -m; vcgencmd measure_temp 2>/dev/null || cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null">📊 系统负载与温度</button>
+  </div>
+
+  <!-- Terminal Output Screen -->
+  <div class="terminal-screen" id="terminalScreen">💻 欢迎使用 DiPlay-Pi 内置诊断控制台！
+------------------------------------------------------------
+• 点击上方预设快捷按钮，即可一键查看 AirPlay/Web/iAP2 运行日志
+• 可以在下方命令行输入任意 Linux Shell 指令 (如 journalctl, ps, ifconfig, reboot 等)
+• 当连接树莓派车载热点无外网时，通过网页无需 SSH 即可随时排查问题！
+------------------------------------------------------------
+</div>
+
+  <!-- Terminal Input Bar -->
+  <div class="terminal-input-bar">
+    <span class="term-prompt">pi@diplay:~$</span>
+    <input type="text" class="term-input" id="terminalInput" placeholder="输入 Shell 指令 (按回车发送)..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+    <button class="term-submit-btn" id="termBtnSubmit">执行 (Enter)</button>
+  </div>
+</div>
+
+<!-- QR Code Download Modal -->
+<div class="terminal-modal" id="logQrModal" style="display: none; position: fixed; inset: 0; z-index: 10005; background: rgba(0,0,0,0.85); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); align-items: center; justify-content: center;">
+  <div style="background: #0f172a; border: 1px solid rgba(255,255,255,0.18); border-radius: 18px; padding: 24px; max-width: 440px; width: 90%; text-align: center; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.8); position: relative; animation: fadeIn 0.2s ease;">
+    <button id="btnCloseQrModal" style="position: absolute; right: 14px; top: 14px; background: rgba(255,255,255,0.1); border: none; color: #94a3b8; font-size: 1.1rem; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center;">✕</button>
+    <div style="font-size: 2rem; margin-bottom: 6px;">📱</div>
+    <h3 style="font-size: 1.15rem; font-weight: 700; color: #f8fafc; margin-bottom: 6px;">手机扫码一键下载日志</h3>
+    <p style="font-size: 0.8rem; color: #94a3b8; line-height: 1.5; margin-bottom: 16px;">
+      请确保手机已连接车机 Wi-Fi: <b style="color: #38bdf8;">Tesla-CarPlay</b><br>
+      使用系统相机扫码，即可在手机直接保存完整日志文件 (<span id="qrLogSizeText">准备中...</span>)
+    </p>
+
+    <!-- Canvas Container for QR Code -->
+    <div style="background: #ffffff; padding: 12px; border-radius: 14px; display: inline-block; box-shadow: 0 4px 18px rgba(0,0,0,0.5); margin-bottom: 16px;">
+      <canvas id="qrCanvas" width="220" height="220" style="display: block;"></canvas>
+    </div>
+
+    <!-- Actions -->
+    <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
+      <a id="btnDirectDownloadLog" href="#" target="_blank" style="text-decoration: none; background: #38bdf8; color: #0f172a; font-weight: 700; font-size: 0.82rem; padding: 8px 16px; border-radius: 8px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+        💾 当前设备直接下载
+      </a>
+      <button id="btnCopyDownloadUrl" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #f8fafc; font-size: 0.82rem; padding: 8px 14px; border-radius: 8px; cursor: pointer;">
+        📋 复制下载链接
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Immersive Mode Floating Restore Trigger -->
+<div id="immersiveRestoreTrigger" class="immersive-trigger" title="点击退出沉浸模式 / 唤出菜单控制栏 (或按键盘 H 键)">
+  <span>👁️ 唤出菜单</span>
+</div>
+
+<!-- Global Floating Toast Notification -->
+<div id="globalToast" class="global-toast" style="display: none;"></div>
 
 <script>
   const screen = document.getElementById('carplayScreen');
@@ -527,12 +1306,51 @@
   const statusBadge = document.getElementById('statusBadge');
   const statusText = document.getElementById('statusText');
   const tagNetwork = document.getElementById('tagNetwork');
+  const tagHardware = document.getElementById('tagHardware');
+  const hwText = document.getElementById('hwText');
+  const tagNetDiag = document.getElementById('tagNetDiag');
+  const netDiagIcon = document.getElementById('netDiagIcon');
+  const netDiagText = document.getElementById('netDiagText');
   const tagResolution = document.getElementById('tagResolution');
   const tagFpsLatency = document.getElementById('tagFpsLatency');
   const aspectHint = document.getElementById('aspectHint');
   const resPopover = document.getElementById('resPopover');
   const btnToggleRes = document.getElementById('btnToggleRes');
   const controlDock = document.getElementById('controlDock');
+
+  const btnWakePhone = document.getElementById('btnWakePhone');
+  if (btnWakePhone) {
+    btnWakePhone.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const originalText = btnWakePhone.innerHTML;
+      btnWakePhone.innerHTML = '<span>⏳ 正在蓝牙唤醒...</span>';
+      try {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'reconnect' }));
+        } else {
+          await fetch('/api/reconnect', { method: 'POST' });
+        }
+      } catch (_) {}
+      setTimeout(() => {
+        btnWakePhone.innerHTML = originalText;
+      }, 3000);
+    });
+  }
+
+  const btnSoftReset = document.getElementById('btnSoftReset');
+  if (btnSoftReset) {
+    btnSoftReset.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const origText = btnSoftReset.innerHTML;
+      btnSoftReset.innerHTML = '<span>⚡ 正在0状态深度重置...</span>';
+      try {
+        await fetch('/api/soft_reset', { method: 'POST' });
+      } catch (_) {}
+      setTimeout(() => {
+        btnSoftReset.innerHTML = origText;
+      }, 4000);
+    });
+  }
 
   let currentWidth = 0;
   let currentHeight = 0;
@@ -562,9 +1380,13 @@
         tagNetwork.style.borderColor = 'rgba(16, 185, 129, 0.4)';
         tagNetwork.style.color = '#34d399';
       }
-      try {
-        ws.send(JSON.stringify({ type: 'requestKeyFrame' }));
-      } catch (_) {}
+      if (typeof resetVideoPipeline === 'function') {
+        resetVideoPipeline('ws_opened');
+      } else {
+        try {
+          ws.send(JSON.stringify({ type: 'requestKeyFrame' }));
+        } catch (_) {}
+      }
     };
 
     ws.onmessage = (event) => {
@@ -593,15 +1415,25 @@
             } else if (channel === 0x01) {
               // Channel 0x01: H.264/H.265 Video Configuration (avcC / SPS+PPS)
               const avcCBuffer = buf.slice(4);
-              const u8Avc = new Uint8Array(avcCBuffer);
-              let codecStr = 'avc1.640028';
-              if (u8Avc.length >= 4) {
-                const p = u8Avc[1].toString(16).padStart(2, '0');
-                const c = u8Avc[2].toString(16).padStart(2, '0');
-                const l = u8Avc[3].toString(16).padStart(2, '0');
-                codecStr = 'avc1.' + p + c + l;
+              if (hasWebCodecs) {
+                const u8Avc = new Uint8Array(avcCBuffer);
+                let codecStr = 'avc1.640028';
+                if (u8Avc.length >= 4 && u8Avc[0] !== 0) {
+                  const p = u8Avc[1].toString(16).padStart(2, '0');
+                  const c = u8Avc[2].toString(16).padStart(2, '0');
+                  const l = u8Avc[3].toString(16).padStart(2, '0');
+                  codecStr = 'avc1.' + p + c + l;
+                }
+                initWebCodecsDecoder(codecStr, avcCBuffer);
+              } else {
+                cachedAnnexBConfig = avccToAnnexB(new Uint8Array(avcCBuffer));
+                sendRemoteLog('[MSE] Converted avcC (' + avcCBuffer.byteLength + 'B) to AnnexB (' + (cachedAnnexBConfig ? cachedAnnexBConfig.length : 0) + 'B)');
+                if (!jmuxerPlayer) initJMuxer();
+                if (jmuxerPlayer && cachedAnnexBConfig) {
+                  jmuxerPlayer.feed({ video: cachedAnnexBConfig });
+                  mseKeyframeFed = true;
+                }
               }
-              initWebCodecsDecoder(codecStr, avcCBuffer);
               return;
             } else if (channel === 0x02) {
               // Channel 0x02: Raw H.264 Video Frame (NAL units in AVCC format)
@@ -619,8 +1451,16 @@
         } else if (typeof event.data === 'string') {
           try {
             const msg = JSON.parse(event.data);
-            if (msg.type === 'hello' || msg.type === 'status') {
-              updateStatusUi(msg);
+            if (msg.type === 'hello' || msg.type === 'status' || msg.type === 'hardware' || msg.type === 'resolution_updated') {
+              if (msg.type === 'hardware' || msg.cpu !== undefined) {
+                updateHardwareUi(msg);
+              }
+              if (msg.type !== 'hardware') {
+                updateStatusUi(msg);
+              }
+              if (msg.type === 'resolution_updated') {
+                sendRemoteLog('[Resolution] 服务器已应用分辨率设置: ' + msg.width + 'x' + msg.height + '，等待 iPhone 协商重连');
+              }
             }
           } catch (_) {}
         }
@@ -631,6 +1471,9 @@
 
     ws.onclose = () => {
       wsConnected = false;
+      if (typeof resetVideoPipeline === 'function') {
+        resetVideoPipeline('ws_closed');
+      }
       if (tagNetwork) {
         tagNetwork.textContent = '🔌 WS 重连中';
         tagNetwork.style.borderColor = 'rgba(239, 68, 68, 0.4)';
@@ -646,24 +1489,181 @@
   }
   initWebSocket();
 
+  let lastServerStatus = null;
+  let lastHardwareStats = null;
+
+  function updateStatusBadge() {
+    const isStreaming = hasReceivedVideoFrame || (lastServerStatus && (lastServerStatus.active || lastServerStatus.hasSession));
+    if (isStreaming) {
+      statusBadge.classList.remove('idle');
+      const modeName = currentStreamMode === 'canvas_mirror' ? 'Canvas' : '硬件流';
+      statusText.textContent = 'CarPlay ' + modeName;
+      statusBadge.title = 'CarPlay 已连接 (' + (currentStreamMode === 'canvas_mirror' ? '方案B: Canvas镜像' : '方案A: 硬件流') + ')，点击切换流模式';
+    } else {
+      statusBadge.classList.add('idle');
+      statusText.textContent = (lastServerStatus && lastServerStatus.hasSession) ? '流准备中' : '等待连接';
+      statusBadge.title = '等待 iPhone 连接 CarPlay，点击设置流模式';
+    }
+  }
+
+  function updateHardwareUi(data) {
+    if (!data || data.cpu === undefined) return;
+    lastHardwareStats = data;
+    if (!tagHardware || !hwText) return;
+
+    const cpu = Math.round(data.cpu);
+    const temp = Math.round(data.temp);
+    hwText.textContent = `CPU: ${cpu}% · ${temp}°C`;
+
+    tagHardware.classList.remove('hw-warn', 'hw-crit');
+    let warnText = '';
+    if (data.temp >= 75 || data.cpu >= 90) {
+      tagHardware.classList.add('hw-crit');
+      warnText = ' ⚠️ 负载/温度极高 (可能触发降频卡顿)';
+    } else if (data.temp >= 68 || data.cpu >= 75) {
+      tagHardware.classList.add('hw-warn');
+      warnText = ' ⚠️ 温度/负载偏高';
+    }
+
+    const memStr = data.memTotal ? ` | 内存: ${data.memUsed || 0}MB/${data.memTotal}MB` : '';
+    tagHardware.title = `树莓派 3B+ 硬件状态: CPU: ${data.cpu}% | 核心温度: ${data.temp}°C${memStr}${warnText} (点击查看)`;
+
+    if (data.bitrate !== undefined || data.wlanBand !== undefined || data.droppedFrames !== undefined) {
+      updateNetworkDiagUi(data);
+    }
+  }
+
+  let lastDiagStats = null;
+  let lastReportedDropCount = 0;
+
+  function updateNetworkDiagUi(data) {
+    if (!data) return;
+    lastDiagStats = Object.assign(lastDiagStats || {}, data);
+    if (!tagNetDiag || !netDiagText) return;
+
+    const bitrate = (data.bitrate !== undefined) ? data.bitrate : (lastDiagStats.bitrate || 0);
+    const band = data.wlanBand || lastDiagStats.wlanBand || '5GHz';
+    const ch = data.wlanChan || lastDiagStats.wlanChan || 36;
+    const queueLen = (data.queueLen !== undefined) ? data.queueLen : (lastDiagStats.queueLen || 0);
+    const droppedFrames = (data.droppedFrames !== undefined) ? data.droppedFrames : (lastDiagStats.droppedFrames || 0);
+    const wlanTx = data.wlanTx || lastDiagStats.wlanTx || 0;
+    const wlanRx = data.wlanRx || lastDiagStats.wlanRx || 0;
+
+    tagNetDiag.classList.remove('diag-warn', 'diag-crit');
+
+    if (droppedFrames > 0 || queueLen >= 20) {
+      tagNetDiag.classList.add('diag-crit');
+      if (netDiagIcon) netDiagIcon.textContent = '🚨';
+      netDiagText.textContent = `丢帧: ${droppedFrames} (积压 ${queueLen}/120)`;
+      if (droppedFrames > lastReportedDropCount) {
+        lastReportedDropCount = droppedFrames;
+        if (typeof appendTerminalOutput === 'function') {
+          appendTerminalOutput(`[链路警报] 🚨 下行队列拥塞丢帧 (累计丢弃 ${droppedFrames} 帧, 队列 ${queueLen}/120)! 划动地图瞬时高码率导致 Wi-Fi 吞吐打满`, 'error');
+        }
+      }
+    } else if (band === '2.4GHz') {
+      tagNetDiag.classList.add('diag-warn');
+      if (netDiagIcon) netDiagIcon.textContent = '⚠️';
+      netDiagText.textContent = `${bitrate > 0 ? bitrate + 'M · ' : ''}2.4G ⚠️`;
+    } else if (bitrate > 15.0) {
+      tagNetDiag.classList.add('diag-warn');
+      if (netDiagIcon) netDiagIcon.textContent = '⚡';
+      netDiagText.textContent = `${bitrate} Mbps (高码率)`;
+    } else {
+      if (netDiagIcon) netDiagIcon.textContent = '📡';
+      netDiagText.textContent = bitrate > 0 ? `${bitrate} Mbps · ${band}` : `${band} CH${ch}`;
+    }
+
+    let tip = `📡 投屏链路与网络吞吐诊断:\n`;
+    tip += `• 视频码率: ${bitrate} Mbps (静态画面 1~2 Mbps，划动地图等高动态场景 15~30 Mbps)\n`;
+    tip += `• Wi-Fi 频段: ${band} (信道 ${ch})${band === '2.4GHz' ? ' ⚠️ [建议切换 5GHz 避免划动地图卡死]' : ' [5G高速抗干扰]'}\n`;
+    tip += `• 发送队列缓冲: ${queueLen} / 120 帧\n`;
+    tip += `• 拥塞丢帧统计: ${droppedFrames} 帧${droppedFrames > 0 ? ' 🚨 [网络发送堵塞]' : ' [传输顺畅]'}\n`;
+    if (wlanTx > 0 || wlanRx > 0) {
+      tip += `• 网卡吞吐: 发送 ↑${wlanTx} Mbps · 接收 ↓${wlanRx} Mbps\n`;
+    }
+    tip += `• 当前渲染模式: ${currentStreamMode === 'canvas_mirror' ? 'Canvas 镜像 (行车防黑屏)' : '极速硬件直出'}\n`;
+    tip += `(点击查看完整诊断分析与排查建议)`;
+    tagNetDiag.title = tip;
+  }
+
+  function showNetworkDiagModal() {
+    const data = lastDiagStats || {};
+    const bitrate = data.bitrate || 0;
+    const band = data.wlanBand || '未知';
+    const ch = data.wlanChan || '--';
+    const queueLen = data.queueLen || 0;
+    const droppedFrames = data.droppedFrames || 0;
+    const hw = lastHardwareStats || {};
+
+    const report = [
+      `==================== 📊 DiPlay 投屏实时链路诊断 ====================`,
+      `• 视频实时码率: ${bitrate} Mbps (${bitrate > 15 ? '⚡ 极高码率 - 地图快速缩放/拖动中' : '正常'})`,
+      `• Wi-Fi 工作频段: ${band} (信道 ${ch}) ${band === '2.4GHz' ? '⚠️ [2.4G 频宽受限，划动地图极易打满卡死，强烈建议切换 5GHz]' : '✅ [5GHz 高速抗干扰频段]'}`,
+      `• 下行缓冲队列: ${queueLen} / 120 帧 (累计丢帧: ${droppedFrames} 帧) ${droppedFrames > 0 ? '🚨 [严重拥塞，部分参考帧丢失会导致几秒黑屏/卡死]' : '✅ [队列通畅]'}`,
+      `• 树莓派硬件占用: CPU ${hw.cpu || 0}% · 温度 ${hw.temp || 0}°C (CPU 占用低属于正常现象，仅中继网络包无需软解)`,
+      `• 当前前端模式: ${currentStreamMode === 'canvas_mirror' ? 'Canvas 离屏镜像 (特斯拉行车防黑屏)' : '极速硬件直出'}`,
+      `------------------------------------------------------------`,
+      `💡 划动地图卡住几秒的根本原因与排查方案:`,
+      `1. 【为什么卡顿但 CPU 低？】树莓派只负责 TCP 转发，不进行视频解码，因此 CPU 仅 10% 左右。`,
+      `2. 【为什么静态正常，一划地图就卡？】静态画面仅需 1~2 Mbps，划动地图全屏纹理变化使 H.264 码率暴增至 20~30 Mbps。由于树莓派单网卡同时接收 iPhone 视频又向车机推流，空口带宽需求翻倍，瞬间打满 Wi-Fi 导致丢包。`,
+      `3. 【如何彻底解决？】`,
+      `   ① 强制切换 5GHz 热点 (信道 36 或 149)，彻底避开 2.4GHz 拥堵；`,
+      `   ② 在右上角投屏尺寸选择中将 iPhone 物理协商分辨率适当调低 (例如 1280x720)，降低 50% 以上高动态码率；`,
+      `   ③ 驻车或无需防黑屏时，点击流模式切换为「方案 A：极速硬件直出」，避免车机 GPU 2D Canvas 重绘开销。`,
+      `============================================================`
+    ].join('\n');
+
+    if (typeof appendTerminalOutput === 'function') {
+      appendTerminalOutput(report);
+      const modal = document.getElementById('terminalModal');
+      if (modal && !modal.classList.contains('open')) {
+        modal.classList.add('open');
+      }
+    }
+
+    if (band === '2.4GHz') {
+      showToast('⚠️ 诊断: 当前为 2.4G Wi-Fi，地图划动易卡死，强烈建议切换 5GHz！', 4000);
+    } else if (droppedFrames > 0) {
+      showToast(`🚨 诊断: 检测到丢帧 (${droppedFrames} 帧)，下行带宽拥塞，详情见控制台！`, 4000);
+    } else {
+      showToast('📡 投屏链路诊断报告已打印至下方控制台，请查看！', 3000);
+    }
+  }
+
+  function updateFpsDisplay(fps, note) {
+    if (!tagFpsLatency) return;
+    const numFps = (fps !== undefined) ? fps : 0;
+    tagFpsLatency.textContent = `${numFps} FPS`;
+    tagFpsLatency.style.color = numFps > 0 ? '#34d399' : 'var(--text-secondary)';
+    tagFpsLatency.title = `实时画面渲染帧率: ${numFps} FPS${note ? ' (' + note + ')' : ''}`;
+  }
+
   function updateStatusUi(data) {
+    lastServerStatus = data;
     currentWidth = data.width || 0;
     currentHeight = data.height || 0;
 
+    if (data.cpu !== undefined) {
+      updateHardwareUi(data);
+    }
+    if (data.bitrate !== undefined || data.wlanBand !== undefined || data.droppedFrames !== undefined) {
+      updateNetworkDiagUi(data);
+    }
+
     if (data.width && data.height) {
-      tagResolution.textContent = data.width + ' × ' + data.height;
+      if (typeof updateResolutionDisplay === 'function') updateResolutionDisplay();
+      else tagResolution.textContent = data.width + ' × ' + data.height;
     }
     if (data.fps !== undefined && !hasReceivedVideoFrame) {
-      tagFpsLatency.textContent = 'FPS: ' + data.fps;
+      updateFpsDisplay(data.fps, '后端帧率');
     }
 
     if (data.active && data.hasSession) {
-      statusBadge.classList.remove('idle');
-      statusText.textContent = hasReceivedVideoFrame ? 'CarPlay 硬件流' : 'CarPlay 运行中';
+      updateStatusBadge();
       emptyOverlay.classList.add('hidden');
     } else {
-      statusBadge.classList.add('idle');
-      statusText.textContent = data.hasSession ? '流准备中' : '等待连接';
+      updateStatusBadge();
       if (!data.hasSession) emptyOverlay.classList.remove('hidden');
     }
 
@@ -713,13 +1713,404 @@
   // WebCodecs 60 FPS Ultra-HD Video Stream Player & Safari Metal Accelerator
   // ----------------------------------------------------
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-  const hasWebCodecs = typeof window.VideoDecoder !== 'undefined';
+  const isSecure = window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  const hasWebCodecs = isSecure && typeof window.VideoDecoder !== 'undefined';
+  
+  // MediaSource (MSE) fallback player for non-secure HTTP contexts
+  let jmuxerPlayer = null;
+  function initJMuxer() {
+    if (jmuxerPlayer || typeof JMuxer === 'undefined') return;
+    try {
+      jmuxerPlayer = new JMuxer({
+        node: 'carplayVideoTag',
+        mode: 'video',
+        flushingTime: 33,   // 33ms 智能微批处理 (匹配 ~30-60fps)，防止 SourceBuffer 异步更新冲突
+        maxDelay: 50,       // 允许最大排队 50ms，超限自动丢弃过时帧
+        clearBuffer: true,
+        fps: 60,
+        debug: false,
+        onError: function(data) {
+          sendRemoteLog('[MSE-JMuxer] error: ' + JSON.stringify(data));
+        }
+      });
+      const videoTag = document.getElementById('carplayVideoTag');
+      if (videoTag) {
+        videoTag.play().catch(function() {});
+        // 实时低延迟平滑追帧：使用动态微调倍速 (playbackRate)，杜绝硬 seek 导致解码管线黑屏冻结！
+        setInterval(() => {
+          if (videoTag.paused && hasReceivedVideoFrame) {
+            videoTag.play().catch(() => {});
+          }
+          if (videoTag.buffered && videoTag.buffered.length > 0) {
+            const end = videoTag.buffered.end(videoTag.buffered.length - 1);
+            const lag = end - videoTag.currentTime;
+            if (lag > 1.2) {
+              // 极端严重滞后（如后台挂起恢复或重连），才执行单次快速追帧跳跃
+              videoTag.currentTime = end - 0.05;
+              videoTag.playbackRate = 1.0;
+            } else if (lag > 0.18) {
+              // 轻度滞后，平滑微幅加速 8% 追齐，无任何画面卡顿或黑屏
+              videoTag.playbackRate = 1.08;
+            } else if (lag < 0.08) {
+              // 已追至零延迟区间，恢复正常原速
+              videoTag.playbackRate = 1.0;
+            }
+          }
+        }, 200);
+      }
+      sendRemoteLog('[MSE] JMuxer 极速微批流与追帧渲染管线就绪！');
+    } catch (e) {
+      sendRemoteLog('[MSE] JMuxer init exception: ' + e);
+    }
+  }
+
+
+  let cachedAnnexBConfig = null;
+  function avccToAnnexB(u8) {
+    if (!u8 || u8.length < 11 || u8[0] !== 1) return u8;
+    try {
+      let offset = 5;
+      const numSps = u8[offset] & 0x1f;
+      offset++;
+      const nalus = [];
+      for (let i = 0; i < numSps && offset + 2 <= u8.length; i++) {
+        const spsLen = (u8[offset] << 8) | u8[offset + 1];
+        offset += 2;
+        if (offset + spsLen <= u8.length) {
+          nalus.push(u8.subarray(offset, offset + spsLen));
+          offset += spsLen;
+        }
+      }
+      if (offset < u8.length) {
+        const numPps = u8[offset];
+        offset++;
+        for (let i = 0; i < numPps && offset + 2 <= u8.length; i++) {
+          const ppsLen = (u8[offset] << 8) | u8[offset + 1];
+          offset += 2;
+          if (offset + ppsLen <= u8.length) {
+            nalus.push(u8.subarray(offset, offset + ppsLen));
+            offset += ppsLen;
+          }
+        }
+      }
+      if (nalus.length > 0) {
+        let totalLen = 0;
+        for (const n of nalus) totalLen += 4 + n.length;
+        const annexB = new Uint8Array(totalLen);
+        let pos = 0;
+        for (const n of nalus) {
+          annexB[pos] = 0; annexB[pos+1] = 0; annexB[pos+2] = 0; annexB[pos+3] = 1;
+          pos += 4;
+          annexB.set(n, pos);
+          pos += n.length;
+        }
+        return annexB;
+      }
+    } catch (e) {
+      console.warn('avccToAnnexB parse error:', e);
+    }
+    return u8;
+  }
+
+  let mseKeyframeFed = false;
+  function handleVideoChunkMSE(naluBuffer, isKey) {
+    lastVideoPacketTime = performance.now();
+    if (!jmuxerPlayer) {
+      initJMuxer();
+    }
+    // Critical: Do NOT feed delta frames into MSE until the fresh keyframe has arrived!
+    if (!mseKeyframeFed) {
+      if (!isKey) {
+        return; // Drop delta frames that arrived before the keyframe
+      }
+      if (cachedAnnexBConfig) {
+        jmuxerPlayer.feed({ video: cachedAnnexBConfig });
+      }
+      mseKeyframeFed = true;
+      sendRemoteLog('[MSE] 关键帧 (IDR) 已到达，开始喂入 MSE SourceBuffer！');
+    }
+    const videoTag = document.getElementById('carplayVideoTag');
+    if (!hasReceivedVideoFrame) {
+      hasReceivedVideoFrame = true;
+      if (screen) screen.style.display = 'none';
+      if (videoCanvas) {
+        videoCanvas.style.display = 'none';
+        videoCanvas.style.zIndex = '1';
+      }
+      if (videoTag) {
+        videoTag.style.display = 'block';
+        videoTag.style.opacity = '1';
+        videoTag.style.zIndex = '5';
+        videoTag.style.pointerEvents = 'auto';
+        videoTag.play().catch(function() {});
+      }
+      emptyOverlay.classList.add('hidden');
+      updateStatusBadge();
+      sendRemoteLog('[MSE] 满帧 60 FPS 硬件直通视频流已点亮 (MSE模式)！');
+    }
+
+    if (jmuxerPlayer) {
+      jmuxerPlayer.feed({
+        video: new Uint8Array(naluBuffer)
+      });
+      if (videoTag && videoTag.paused) {
+        videoTag.play().catch(function() {});
+      }
+    }
+
+    videoFrameCounter++;
+    const now = performance.now();
+    if (now - videoFpsInterval >= 1000) {
+      currentVideoFps = Math.round((videoFrameCounter * 1000) / (now - videoFpsInterval));
+      videoFrameCounter = 0;
+      videoFpsInterval = now;
+      updateFpsDisplay(currentVideoFps, '硬件直出');
+    }
+  }
+
   const videoCanvas = document.getElementById('carplayVideoCanvas');
-  const videoCtx = videoCanvas ? videoCanvas.getContext('2d', isSafari ? { alpha: false } : { alpha: false, desynchronized: true }) : null;
+  // Safe 2D context without desynchronized: true to ensure DRM/Wayland compositor overlay shifts in D/R gear never black out
+  const videoCtx = videoCanvas ? videoCanvas.getContext('2d', { alpha: false }) : null;
   if (videoCtx) {
     videoCtx.imageSmoothingEnabled = true;
     videoCtx.imageSmoothingQuality = 'high';
   }
+
+  // ----------------------------------------------------
+  // FFmpeg WASM + WebGL Pure Software Decoder (Tesla Drive Gear Bypass)
+  // Operates 100% offline over plain HTTP! Decodes High-Profile H.264 CABAC via WASM,
+  // renders via WebGL shaders on Canvas, completely bypassing Tesla D-gear pause!
+  // ----------------------------------------------------
+  let wasmDecoderOpen = false;
+  let wasmPlayer = null;
+  let wasmCanvas = null;
+  let wasmKeyframeFed = false;
+  let wasmPts = 0;
+  let wasmAllocatedPtr = 0;
+  let wasmAllocatedCap = 0;
+  let wasmCallbackPtr = 0;
+
+  function initWasmPlayer() {
+    if (wasmDecoderOpen) return true;
+    if (typeof Module === 'undefined' || typeof Module._openDecoder !== 'function' || typeof Module.addFunction !== 'function') {
+      return false;
+    }
+    wasmCanvas = document.getElementById('carplayBroadwayCanvas');
+    if (!wasmCanvas) return false;
+
+    try {
+      if (!wasmPlayer && typeof WebGLPlayer !== 'undefined') {
+        wasmPlayer = new WebGLPlayer(wasmCanvas, { preserveDrawingBuffer: false });
+      }
+
+      if (!wasmCallbackPtr) {
+        wasmCallbackPtr = Module.addFunction(function (addr_y, addr_u, addr_v, stride_y, stride_u, stride_v, width, height, pts) {
+          if (wasmCanvas.width !== width || wasmCanvas.height !== height) {
+            wasmCanvas.width = width;
+            wasmCanvas.height = height;
+            currentWidth = width;
+            currentHeight = height;
+            if (typeof updateResolutionDisplay === 'function') updateResolutionDisplay();
+          }
+
+          const size = width * height + (width / 2) * (height / 2) * 2;
+          const frameData = new Uint8Array(size);
+          let pos = 0;
+
+          for (let i = 0; i < height; i++) {
+            const src = addr_y + i * stride_y;
+            frameData.set(Module.HEAPU8.subarray(src, src + width), pos);
+            pos += width;
+          }
+          for (let i = 0; i < height / 2; i++) {
+            const src = addr_u + i * stride_u;
+            frameData.set(Module.HEAPU8.subarray(src, src + width / 2), pos);
+            pos += width / 2;
+          }
+          for (let i = 0; i < height / 2; i++) {
+            const src = addr_v + i * stride_v;
+            frameData.set(Module.HEAPU8.subarray(src, src + width / 2), pos);
+            pos += width / 2;
+          }
+
+          const yLength = width * height;
+          const uvLength = (width / 2) * (height / 2);
+          if (wasmPlayer) {
+            wasmPlayer.renderFrame(frameData, width, height, yLength, uvLength);
+          }
+
+          if (!hasReceivedVideoFrame) {
+            hasReceivedVideoFrame = true;
+            if (screen) screen.style.display = 'none';
+            emptyOverlay.classList.add('hidden');
+            updateStatusBadge();
+            sendRemoteLog('[WASM-WebGL] 行车防黑屏视频已点亮！');
+          }
+
+          videoFrameCounter++;
+          const now = performance.now();
+          if (now - videoFpsInterval >= 1000) {
+            currentVideoFps = Math.round((videoFrameCounter * 1000) / (now - videoFpsInterval));
+            videoFrameCounter = 0;
+            videoFpsInterval = now;
+            updateFpsDisplay(currentVideoFps, 'WebGL软解');
+          }
+        });
+      }
+
+      const ret = Module._openDecoder(0 /* H.264 */, wasmCallbackPtr, 0 /* log level */);
+      if (ret === 0) {
+        wasmDecoderOpen = true;
+        sendRemoteLog('[WASM-WebGL] 初始化 FFmpeg H.264 WebGL 解码器成功！');
+        return true;
+      } else {
+        console.error('[WASM-WebGL] openDecoder failed:', ret);
+        return false;
+      }
+    } catch (e) {
+      console.error('[WASM-WebGL] Init failed:', e);
+      sendRemoteLog('[WASM-WebGL] Init failed: ' + (e ? (e.message || e) : ''));
+      return false;
+    }
+  }
+
+  function handleVideoChunkWasm(naluBuffer, isKey) {
+    lastVideoPacketTime = performance.now();
+    if (!wasmDecoderOpen) {
+      if (!initWasmPlayer()) return;
+    }
+
+    if (!wasmKeyframeFed) {
+      if (!isKey) {
+        const now = Date.now();
+        if (now - lastKeyframeRequestTime > 1000) {
+          lastKeyframeRequestTime = now;
+          if (ws && wsConnected) {
+            ws.send(JSON.stringify({ type: 'requestKeyFrame' }));
+          }
+        }
+        return; // Drop delta frames while awaiting IDR keyframe
+      }
+      if (cachedAnnexBConfig) {
+        try {
+          const cfg = new Uint8Array(cachedAnnexBConfig);
+          const p = Module._malloc(cfg.length);
+          Module.HEAPU8.set(cfg, p);
+          Module._decodeData(p, cfg.length, wasmPts++);
+          Module._free(p);
+        } catch (_) {}
+      }
+      wasmKeyframeFed = true;
+      sendRemoteLog('[WASM-WebGL] 关键帧 (IDR) 已到达，开始 WebGL 解码渲染！');
+    }
+
+    try {
+      const u8 = new Uint8Array(naluBuffer);
+      const len = u8.length;
+      if (len > wasmAllocatedCap) {
+        if (wasmAllocatedPtr) Module._free(wasmAllocatedPtr);
+        wasmAllocatedCap = Math.max(len, 1024 * 1024);
+        wasmAllocatedPtr = Module._malloc(wasmAllocatedCap);
+      }
+      Module.HEAPU8.set(u8, wasmAllocatedPtr);
+      Module._decodeData(wasmAllocatedPtr, len, wasmPts++);
+    } catch (e) {
+      sendRemoteLog('[WASM-WebGL] Decode error: ' + (e ? (e.message || e) : ''));
+    }
+  }
+
+  let rawStoredMode = localStorage.getItem('diplay_stream_mode');
+  let currentStreamMode = (rawStoredMode === 'canvas_mirror' || rawStoredMode === 'mjpeg') ? 'canvas_mirror' : 'hardware';
+
+  function applyStreamMode(mode, showNotice) {
+    if (mode === 'video_mse' || mode === 'canvas_mirror' || mode === 'mjpeg') {
+      currentStreamMode = (mode === 'video_mse') ? 'video_mse' : 'hardware';
+    } else {
+      currentStreamMode = 'hardware';
+    }
+    localStorage.setItem('diplay_stream_mode', currentStreamMode);
+
+    const checkPlanA = document.getElementById('checkPlanA');
+    const checkPlanB = document.getElementById('checkPlanB');
+    const btnSelectPlanA = document.getElementById('btnSelectPlanA');
+    const btnSelectPlanB = document.getElementById('btnSelectPlanB');
+    const labelStreamMode = document.getElementById('labelStreamMode');
+    const iconStreamMode = document.getElementById('iconStreamMode');
+    const videoTag = document.getElementById('carplayVideoTag');
+    const broadwayCvs = document.getElementById('carplayBroadwayCanvas');
+
+    if (screen) screen.style.display = 'none';
+    if (broadwayCvs) broadwayCvs.style.display = 'none';
+
+    if (currentStreamMode === 'hardware') {
+      if (checkPlanA) checkPlanA.style.display = 'inline';
+      if (checkPlanB) checkPlanB.style.display = 'none';
+      if (btnSelectPlanA) btnSelectPlanA.classList.add('current');
+      if (btnSelectPlanB) btnSelectPlanB.classList.remove('current');
+      if (labelStreamMode) labelStreamMode.textContent = 'Canvas直出';
+      if (iconStreamMode) iconStreamMode.textContent = '⚡';
+
+      if (videoTag) {
+        try { videoTag.pause(); } catch (_) {}
+        videoTag.style.display = 'none';
+        videoTag.style.pointerEvents = 'none';
+      }
+
+      if (hasWebCodecs) {
+        if (videoCanvas) {
+          videoCanvas.style.display = 'block';
+          videoCanvas.style.zIndex = '5';
+          videoCanvas.style.pointerEvents = 'auto';
+        }
+        if (broadwayCvs) broadwayCvs.style.display = 'none';
+        if (showNotice) showToast('⚡ 已切换为「Canvas 极速硬件流 (行车防暂停)」');
+      } else {
+        if (videoCanvas) videoCanvas.style.display = 'none';
+        if (broadwayCvs) {
+          broadwayCvs.style.display = 'block';
+          broadwayCvs.style.zIndex = '5';
+          broadwayCvs.style.pointerEvents = 'auto';
+        }
+        if (showNotice) showToast('⚡ 已启用「Canvas WebGL 离线软解 (行车防暂停/无需HTTPS)」');
+      }
+
+      if (hasReceivedVideoFrame) {
+        emptyOverlay.classList.add('hidden');
+        updateStatusBadge();
+      }
+    } else {
+      // 方案 B：Video 标签兼容流 (MSE)
+      if (checkPlanA) checkPlanA.style.display = 'none';
+      if (checkPlanB) checkPlanB.style.display = 'inline';
+      if (btnSelectPlanA) btnSelectPlanA.classList.remove('current');
+      if (btnSelectPlanB) btnSelectPlanB.classList.add('current');
+      if (labelStreamMode) labelStreamMode.textContent = 'Video流';
+      if (iconStreamMode) iconStreamMode.textContent = '🎬';
+
+      if (videoCanvas) {
+        videoCanvas.style.display = 'none';
+        videoCanvas.style.pointerEvents = 'none';
+      }
+      if (videoTag) {
+        videoTag.style.display = 'block';
+        videoTag.style.opacity = '1';
+        videoTag.style.visibility = 'visible';
+        videoTag.style.zIndex = '5';
+        videoTag.style.pointerEvents = 'auto';
+        videoTag.play().catch(function() {});
+      }
+
+      if (hasReceivedVideoFrame) {
+        emptyOverlay.classList.add('hidden');
+        updateStatusBadge();
+      }
+
+      if (showNotice) showToast('🎬 已切换为「方案 B：Video 标签兼容流」');
+    }
+
+    if (typeof updateResolutionDisplay === 'function') updateResolutionDisplay();
+  }
+
   let videoDecoder = null;
   let decoderConfigured = false;
   let hasReceivedVideoFrame = false;
@@ -793,13 +2184,13 @@
       videoDecoder = new VideoDecoder({
         output: (frame) => {
           lastWebCodecsFrameTime = performance.now();
+          lastVideoPacketTime = performance.now();
           if (!hasReceivedVideoFrame) {
             hasReceivedVideoFrame = true;
             screen.style.display = 'none';
             videoCanvas.style.display = 'block';
             emptyOverlay.classList.add('hidden');
-            statusBadge.classList.remove('idle');
-            statusText.textContent = 'CarPlay 硬件流';
+            updateStatusBadge();
             sendRemoteLog('[WebCodecs] 满帧 60 FPS 硬件直通视频流已点亮！');
           }
           if (videoCanvas.width !== frame.displayWidth || videoCanvas.height !== frame.displayHeight) {
@@ -807,7 +2198,8 @@
             videoCanvas.height = frame.displayHeight;
             currentWidth = frame.displayWidth;
             currentHeight = frame.displayHeight;
-            tagResolution.textContent = currentWidth + ' × ' + currentHeight;
+            if (typeof updateResolutionDisplay === 'function') updateResolutionDisplay();
+            else tagResolution.textContent = currentWidth + ' × ' + currentHeight;
             if (videoCtx) {
               videoCtx.imageSmoothingEnabled = true;
               videoCtx.imageSmoothingQuality = 'high';
@@ -818,19 +2210,26 @@
           }
           frame.close();
 
+          if (videoDecoder && videoDecoder.decodeQueueSize > 5) {
+            sendRemoteLog('[WebCodecs] ⚠️ 浏览器解码队列滞后: ' + videoDecoder.decodeQueueSize + ' 帧 (车机 GPU/渲染滞后)');
+          }
+
           videoFrameCounter++;
           const now = performance.now();
           if (now - videoFpsInterval >= 1000) {
             currentVideoFps = Math.round((videoFrameCounter * 1000) / (now - videoFpsInterval));
             videoFrameCounter = 0;
             videoFpsInterval = now;
-            tagFpsLatency.textContent = 'FPS: ' + currentVideoFps + ' (60fps硬件流)';
-            tagFpsLatency.style.color = '#34d399';
+            updateFpsDisplay(currentVideoFps, '硬件直出');
             sendRemoteLog('[WebCodecs] 实时硬件帧率: ' + currentVideoFps + ' FPS');
           }
         },
         error: (e) => {
-          sendRemoteLog('[WebCodecs] Decoder error: ' + (e ? (e.message || e) : 'unknown'));
+          const errMsg = e ? (e.message || e) : 'unknown';
+          sendRemoteLog('[WebCodecs] ⚠️ 解码器异常或丢失参考帧: ' + errMsg + '，已重新请求关键帧 (IDR)');
+          if (typeof appendTerminalOutput === 'function') {
+            appendTerminalOutput(`[WebCodecs 异常] ⚠️ 视频参考帧丢失 (${errMsg})，画面短暂冻结，已请求 iPhone 发送关键帧 (IDR) 恢复...`, 'error');
+          }
           const now = Date.now();
           if (now - lastKeyframeRequestTime > 1000) {
             lastKeyframeRequestTime = now;
@@ -864,52 +2263,138 @@
   }
 
   function handleVideoChunk(naluBuffer, isKey) {
-    if (!hasWebCodecs) return;
-
-    if (!videoDecoder || !decoderConfigured || videoDecoder.state === 'closed') {
-      if (cachedDescription) {
-        initWebCodecsDecoder(cachedCodecStr, cachedDescription);
-      } else {
-        return;
-      }
-    }
-
-    // Critical: Do NOT submit delta frames until the first keyframe has arrived!
-    if (!hasReceivedKeyframe) {
-      if (!isKey) {
-        const now = Date.now();
-        if (now - lastKeyframeRequestTime > 1000) {
-          lastKeyframeRequestTime = now;
-          if (ws && wsConnected) {
-            ws.send(JSON.stringify({ type: 'requestKeyFrame' }));
+    if (currentStreamMode !== 'video_mse') {
+      if (hasWebCodecs) {
+        if (!videoDecoder || !decoderConfigured || videoDecoder.state === 'closed') {
+          if (cachedDescription) {
+            initWebCodecsDecoder(cachedCodecStr, cachedDescription);
+          } else {
+            return;
           }
         }
+
+        // Critical: Do NOT submit delta frames until the first keyframe has arrived!
+        if (!hasReceivedKeyframe) {
+          if (!isKey) {
+            const now = Date.now();
+            if (now - lastKeyframeRequestTime > 1000) {
+              lastKeyframeRequestTime = now;
+              if (ws && wsConnected) {
+                ws.send(JSON.stringify({ type: 'requestKeyFrame' }));
+              }
+              sendRemoteLog('[WebCodecs] ⚠️ 正在等待关键帧 (IDR) 恢复画面解码 (丢弃参考帧丢失的增量帧)...');
+            }
+            return;
+          }
+          hasReceivedKeyframe = true;
+          sendRemoteLog('[WebCodecs] 关键帧 (IDR) 已到达，恢复硬件解码输出！');
+        }
+
+        try {
+          let currentTs = Math.round(performance.now() * 1000);
+          if (currentTs <= lastVideoTimestamp) {
+            currentTs = lastVideoTimestamp + 1000;
+          }
+          lastVideoTimestamp = currentTs;
+
+          // Transform Annex-B start codes to AVCC 4-byte lengths for Apple VideoToolbox / Safari
+          const avccBuffer = toAvccInPlace(naluBuffer);
+
+          const chunk = new EncodedVideoChunk({
+            type: isKey ? 'key' : 'delta',
+            timestamp: currentTs,
+            data: avccBuffer
+          });
+          videoDecoder.decode(chunk);
+        } catch (e) {
+          sendRemoteLog('[WebCodecs] Chunk decode exception: ' + (e ? (e.message || e) : ''));
+        }
+        return;
+      } else {
+        // Plain HTTP or environment without WebCodecs (Tesla Browser on HTTP) -> FFmpeg WASM + WebGL on Canvas!
+        handleVideoChunkWasm(naluBuffer, isKey);
         return;
       }
-      hasReceivedKeyframe = true;
-      sendRemoteLog('[WebCodecs] First Keyframe received! Starting hardware render.');
+    }
+    handleVideoChunkMSE(naluBuffer, isKey);
+  }
+
+  /**
+   * Complete Video Pipeline Reset:
+   * Called on WebSocket connect/reconnect, browser tab foregrounding (visibilitychange), or window focus.
+   * Completely discards reference frame state, flushes decoder queues, and waits for a fresh real-time IDR keyframe from iPhone.
+   */
+  function resetVideoPipeline(reason) {
+    hasReceivedKeyframe = false;
+    mseKeyframeFed = false;
+    wasmKeyframeFed = false;
+    if (typeof Module !== 'undefined' && Module._flushDecoder && wasmDecoderOpen) {
+      try { Module._flushDecoder(); } catch (_) {}
+    }
+    lastVideoTimestamp = 0;
+    sendRemoteLog('[VideoPipeline] 🔄 重置解码管线并清空参考帧缓存 (' + (reason || 'unknown') + ')');
+
+    // 1. WebCodecs 管线重置：清空滞后帧并等待全新实时 IDR 帧
+    if (hasWebCodecs && videoDecoder && videoDecoder.state !== 'closed') {
+      try {
+        videoDecoder.reset();
+        const config = {
+          codec: cachedCodecStr || 'avc1.640028'
+        };
+        if (!isSafari) {
+          config.optimizeForLatency = true;
+        }
+        if (cachedDescription && cachedDescription.byteLength > 0) {
+          config.description = cachedDescription;
+        }
+        videoDecoder.configure(config);
+        decoderConfigured = true;
+      } catch (e) {
+        if (cachedDescription) {
+          initWebCodecsDecoder(cachedCodecStr, cachedDescription);
+        }
+      }
     }
 
-    try {
-      let currentTs = Math.round(performance.now() * 1000);
-      if (currentTs <= lastVideoTimestamp) {
-        currentTs = lastVideoTimestamp + 1000;
+    // 2. MSE 管线重置：清空 SourceBuffer，防止播放过期历史缓冲
+    if (!hasWebCodecs && jmuxerPlayer) {
+      try {
+        jmuxerPlayer.destroy();
+      } catch (_) {}
+      jmuxerPlayer = null;
+      initJMuxer();
+      const videoTag = document.getElementById('carplayVideoTag');
+      if (videoTag) {
+        try {
+          videoTag.removeAttribute('src');
+          videoTag.load();
+        } catch (_) {}
       }
-      lastVideoTimestamp = currentTs;
+    }
 
-      // Transform Annex-B start codes to AVCC 4-byte lengths for Apple VideoToolbox / Safari
-      const avccBuffer = toAvccInPlace(naluBuffer);
-
-      const chunk = new EncodedVideoChunk({
-        type: isKey ? 'key' : 'delta',
-        timestamp: currentTs,
-        data: avccBuffer
-      });
-      videoDecoder.decode(chunk);
-    } catch (e) {
-      sendRemoteLog('[WebCodecs] Chunk decode exception: ' + (e ? (e.message || e) : ''));
+    // 3. 向树莓派及 iPhone 索要最新的实时 IDR 关键帧
+    if (ws && wsConnected) {
+      try {
+        ws.send(JSON.stringify({ type: 'requestKeyFrame' }));
+      } catch (_) {}
     }
   }
+
+  // 页面生命周期监听：挂 D 档或倒车切回前台时，保持当前解码器与最后画面，不强制重置解码器避免黑屏
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      sendRemoteLog('[VideoPipeline] 页面恢复前台可见，保持解码器运行与上帧画面');
+      // 如果已断连或超过 3 秒没有帧到达，仅温和请求一次关键帧，绝不重置解码器或清空画面
+      if (ws && wsConnected && performance.now() - lastVideoPacketTime > 3000) {
+        try { ws.send(JSON.stringify({ type: 'requestKeyFrame' })); } catch (_) {}
+      }
+    }
+  });
+  window.addEventListener('pageshow', () => {
+    if (ws && wsConnected && performance.now() - lastVideoPacketTime > 3000) {
+      try { ws.send(JSON.stringify({ type: 'requestKeyFrame' })); } catch (_) {}
+    }
+  });
 
   // ----------------------------------------------------
   // Ultra-Fast WebSocket Bitmap Streaming (GPU createImageBitmap Fallback)
@@ -919,8 +2404,8 @@
   let currentFastFps = 0;
 
   function handleFastImageFrame(imgBuffer) {
-    // If WebCodecs hardware stream has started, NEVER let fallback JPEG overwrite the canvas or distort dimensions!
-    if (hasWebCodecs && hasReceivedVideoFrame) {
+    // If Plan A (H.264) is active and running, do not let image frames overwrite
+    if (currentStreamMode === 'canvas_h264' && hasReceivedVideoFrame) {
       return;
     }
 
@@ -928,24 +2413,27 @@
     if (typeof createImageBitmap !== 'undefined') {
       createImageBitmap(blob, { resizeQuality: 'high' }).then(bmp => {
         // Double check WebCodecs hasn't taken over while image was decoding
-        if (hasWebCodecs && videoDecoder && (performance.now() - lastWebCodecsFrameTime < 1500)) {
+        if (currentStreamMode === 'canvas_h264' && hasWebCodecs && videoDecoder && (performance.now() - lastWebCodecsFrameTime < 1500)) {
           bmp.close();
           return;
         }
         if (!hasReceivedVideoFrame) {
           hasReceivedVideoFrame = true;
-          screen.style.display = 'none';
-          videoCanvas.style.display = 'block';
+          if (screen) screen.style.display = 'none';
+          if (videoCanvas) videoCanvas.style.display = 'block';
+          const videoTag = document.getElementById('carplayVideoTag');
+          if (videoTag) videoTag.style.display = 'none';
           emptyOverlay.classList.add('hidden');
           statusBadge.classList.remove('idle');
-          statusText.textContent = 'CarPlay 极速流';
+          statusText.textContent = 'CarPlay 极速图片流';
         }
         if (videoCanvas.width !== bmp.width || videoCanvas.height !== bmp.height) {
           videoCanvas.width = bmp.width;
           videoCanvas.height = bmp.height;
           currentWidth = bmp.width;
           currentHeight = bmp.height;
-          tagResolution.textContent = currentWidth + ' × ' + currentHeight;
+          if (typeof updateResolutionDisplay === 'function') updateResolutionDisplay();
+          else tagResolution.textContent = currentWidth + ' × ' + currentHeight;
           if (videoCtx) {
             videoCtx.imageSmoothingEnabled = true;
             videoCtx.imageSmoothingQuality = 'high';
@@ -962,16 +2450,31 @@
           currentFastFps = Math.round((fastFrameCount * 1000) / (now - fastFpsInterval));
           fastFrameCount = 0;
           fastFpsInterval = now;
-          tagFpsLatency.textContent = 'FPS: ' + currentFastFps + ' (GPU极速流)';
-          tagFpsLatency.style.color = '#34d399';
+          tagFpsLatency.textContent = 'FPS: ' + currentFastFps + ' (极速图片流)';
+          tagFpsLatency.style.color = '#10b981';
         }
       }).catch(() => {});
     }
   }
 
   function getActiveScreenElement() {
-    if (hasReceivedVideoFrame && videoCanvas && videoCanvas.style.display !== 'none') {
+    const broadwayCvs = document.getElementById('carplayBroadwayCanvas');
+    if (currentStreamMode === 'canvas_mirror') {
+      if (broadwayCvs && broadwayCvs.style.display !== 'none') return broadwayCvs;
+      if (videoCanvas && videoCanvas.style.display !== 'none') return videoCanvas;
+    }
+    if (hasWebCodecs && videoCanvas && videoCanvas.style.display !== 'none') {
       return videoCanvas;
+    }
+    const videoTag = document.getElementById('carplayVideoTag');
+    if (videoTag && videoTag.style.display !== 'none') {
+      return videoTag;
+    }
+    if (videoCanvas && videoCanvas.style.display !== 'none') {
+      return videoCanvas;
+    }
+    if (broadwayCvs && broadwayCvs.style.display !== 'none') {
+      return broadwayCvs;
     }
     return screen;
   }
@@ -983,8 +2486,34 @@
   function getAccurateTouchCoordinates(e) {
     const activeEl = getActiveScreenElement();
     const rect = activeEl.getBoundingClientRect();
-    const naturalW = (activeEl === videoCanvas ? videoCanvas.width : (screen.naturalWidth || currentWidth || 16));
-    const naturalH = (activeEl === videoCanvas ? videoCanvas.height : (screen.naturalHeight || currentHeight || 9));
+    let naturalW = 1920;
+    let naturalH = 1080;
+    if (activeEl === videoCanvas || activeEl.id === 'carplayBroadwayCanvas') {
+      naturalW = activeEl.width || currentWidth || 1920;
+      naturalH = activeEl.height || currentHeight || 1080;
+    } else if (activeEl && activeEl.tagName === 'VIDEO') {
+      naturalW = activeEl.videoWidth || currentWidth || 1920;
+      naturalH = activeEl.videoHeight || currentHeight || 1080;
+    } else if (screen) {
+      naturalW = screen.naturalWidth || currentWidth || 1920;
+      naturalH = screen.naturalHeight || currentHeight || 1080;
+    }
+    let displayFitMode = (window.diplayFitMode || 'contain');
+
+    if (displayFitMode === 'fill') {
+      const clickX = e.clientX - rect.left;
+      const clickY = e.clientY - rect.top;
+      if (clickX < 0 || clickX > rect.width || clickY < 0 || clickY > rect.height) {
+        return null;
+      }
+      return {
+        x: Math.max(0, Math.min(1, clickX / rect.width)),
+        y: Math.max(0, Math.min(1, clickY / rect.height)),
+        visualX: e.clientX,
+        visualY: e.clientY
+      };
+    }
+
     const naturalRatio = naturalW / naturalH;
     const clientRatio = rect.width / rect.height;
 
@@ -993,12 +2522,25 @@
     let offsetX = 0;
     let offsetY = 0;
 
-    if (clientRatio > naturalRatio) {
-      renderWidth = rect.height * naturalRatio;
-      offsetX = (rect.width - renderWidth) / 2;
+    if (displayFitMode === 'cover') {
+      if (clientRatio > naturalRatio) {
+        renderWidth = rect.width;
+        renderHeight = rect.width / naturalRatio;
+        offsetY = (rect.height - renderHeight) / 2;
+      } else {
+        renderHeight = rect.height;
+        renderWidth = rect.height * naturalRatio;
+        offsetX = (rect.width - renderWidth) / 2;
+      }
     } else {
-      renderHeight = rect.width / naturalRatio;
-      offsetY = (rect.height - renderHeight) / 2;
+      // contain (default)
+      if (clientRatio > naturalRatio) {
+        renderWidth = rect.height * naturalRatio;
+        offsetX = (rect.width - renderWidth) / 2;
+      } else {
+        renderHeight = rect.width / naturalRatio;
+        offsetY = (rect.height - renderHeight) / 2;
+      }
     }
 
     const clickX = e.clientX - rect.left - offsetX;
@@ -1055,14 +2597,52 @@
     }
   }
 
-  let touchSendScheduled = false;
-  function scheduleSendTouchReport() {
-    if (touchSendScheduled) return;
-    touchSendScheduled = true;
-    requestAnimationFrame(() => {
-      touchSendScheduled = false;
+  // ----------------------------------------------------
+  // Ultra Low-Latency Binary Touch Protocol (100Hz Micro-Throttle)
+  // ----------------------------------------------------
+  const touchPacketBuffer = new ArrayBuffer(14);
+  const touchPacketView = new DataView(touchPacketBuffer);
+
+  function packBinaryTouch(contacts) {
+    const count = Math.min(contacts.length, 2);
+    touchPacketView.setUint8(0, 0x54); // Magic 'T'
+    touchPacketView.setUint8(1, count);
+    for (let i = 0; i < count; i++) {
+      const c = contacts[i];
+      const offset = 2 + i * 6;
+      touchPacketView.setUint8(offset, c.id & 0xff);
+      touchPacketView.setUint8(offset + 1, c.down ? 1 : 0);
+      const nx = Math.max(0, Math.min(65535, Math.round(c.x * 65535)));
+      const ny = Math.max(0, Math.min(65535, Math.round(c.y * 65535)));
+      touchPacketView.setUint16(offset + 2, nx, false); // Big-Endian
+      touchPacketView.setUint16(offset + 4, ny, false); // Big-Endian
+    }
+    return new Uint8Array(touchPacketBuffer, 0, 2 + count * 6);
+  }
+
+  let lastTouchSendTime = 0;
+  let touchTrailingTimer = null;
+
+  function scheduleSendTouchReport(forceImmediate = false) {
+    const now = performance.now();
+    const elapsed = now - lastTouchSendTime;
+    const interval = forceImmediate ? 0 : 16; // 60Hz smooth drag interval (16ms) matches display frame rate and prevents Pi 3B+ CPU overload
+
+    if (forceImmediate || elapsed >= interval) {
+      if (touchTrailingTimer) {
+        clearTimeout(touchTrailingTimer);
+        touchTrailingTimer = null;
+      }
+      lastTouchSendTime = now;
       dispatchTouchContacts();
-    });
+    } else if (!touchTrailingTimer) {
+      const waitTime = Math.max(1, interval - elapsed);
+      touchTrailingTimer = setTimeout(() => {
+        touchTrailingTimer = null;
+        lastTouchSendTime = performance.now();
+        dispatchTouchContacts();
+      }, waitTime);
+    }
   }
 
   async function dispatchTouchContacts() {
@@ -1076,12 +2656,10 @@
       });
     }
 
-    // Prioritize ultra-low latency WebSocket transmission
+    // Prioritize ultra-low latency WebSocket Binary transmission
     if (wsConnected && ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'touch',
-        contacts: contacts
-      }));
+      const bin = packBinaryTouch(contacts);
+      ws.send(bin);
       return;
     }
 
@@ -1097,7 +2675,7 @@
 
   canvas.addEventListener('pointerdown', (e) => {
     unlockAudio();
-    if (e.target.closest('.floating-header') || e.target.closest('.control-dock') || e.target.closest('.res-popover') || e.target.closest('.aspect-hint')) {
+    if (e.target.closest('.floating-header') || e.target.closest('.control-dock') || e.target.closest('.res-popover') || e.target.closest('.aspect-hint') || e.target.closest('.immersive-trigger') || e.target.closest('.global-toast')) {
       return;
     }
     const coords = getAccurateTouchCoordinates(e);
@@ -1119,7 +2697,7 @@
     });
 
     updateTouchFeedback(slot, coords.visualX, coords.visualY, true);
-    dispatchTouchContacts();
+    scheduleSendTouchReport(true);
   });
 
   canvas.addEventListener('pointermove', (e) => {
@@ -1138,7 +2716,7 @@
     }
 
     updateTouchFeedback(contact.slot, contact.visualX, contact.visualY, true);
-    scheduleSendTouchReport();
+    scheduleSendTouchReport(false);
   });
 
   function handlePointerRelease(e) {
@@ -1148,8 +2726,8 @@
     contact.down = false;
     updateTouchFeedback(contact.slot, contact.visualX, contact.visualY, false);
 
-    // Send the lifted state (down: false) to CarPlay
-    dispatchTouchContacts();
+    // Send the lifted state (down: false) to CarPlay immediately
+    scheduleSendTouchReport(true);
 
     activeContacts.delete(e.pointerId);
 
@@ -1157,7 +2735,7 @@
       setTimeout(() => {
         if (activeContacts.size === 0) {
           if (wsConnected && ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'touch', contacts: [] }));
+            ws.send(packBinaryTouch([]));
           }
         }
       }, 10);
@@ -1397,11 +2975,31 @@
     audioActive = active;
     if (active) {
       btnAudio.classList.add('active-audio');
-      labelAudio.textContent = '网页声音: 播放中';
+      if (labelAudio) labelAudio.textContent = '声音: 开启';
     } else {
       btnAudio.classList.remove('active-audio');
-      labelAudio.textContent = '网页声音: 已静音';
+      if (labelAudio) labelAudio.textContent = '声音: 静音';
     }
+  }
+
+  // Bottom Dock Reconnect Trigger
+  const btnDockReconnect = document.getElementById('btnDockReconnect');
+  if (btnDockReconnect) {
+    btnDockReconnect.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const origHtml = btnDockReconnect.innerHTML;
+      btnDockReconnect.innerHTML = '<span>⏳</span> <span>唤醒中</span>';
+      try {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'reconnect' }));
+        } else {
+          await fetch('/api/reconnect', { method: 'POST' });
+        }
+      } catch (_) {}
+      setTimeout(() => {
+        btnDockReconnect.innerHTML = origHtml;
+      }, 3000);
+    });
   }
 
   const unlockAudio = async () => {
@@ -1515,10 +3113,10 @@
       micProcessor.connect(micAudioContext.destination);
 
       isMicActive = true;
-      btnMic.classList.add('active-mic');
-      labelMic.textContent = '麦克风: 监听中';
+      if (btnMic) btnMic.classList.add('active-mic');
+      if (labelMic) labelMic.textContent = '麦克: 监听中';
     } catch (e) {
-      alert('无法开启网页麦克风: ' + e.message);
+      console.warn('Microphone unavailable in current context:', e.message);
     }
   }
 
@@ -1529,27 +3127,29 @@
       micProcessor = null;
     }
     if (micMediaStream) {
-      micMediaStream.getTracks().forEach(t => t.stop());
+      try { micMediaStream.getTracks().forEach(t => t.stop()); } catch (_) {}
       micMediaStream = null;
     }
     if (micAudioContext) {
       try { micAudioContext.close(); } catch (_) {}
       micAudioContext = null;
     }
-    btnMic.classList.remove('active-mic');
-    labelMic.textContent = '网页麦克风';
+    if (btnMic) btnMic.classList.remove('active-mic');
+    if (labelMic) labelMic.textContent = '麦克';
   }
 
-  btnMic.addEventListener('click', () => {
-    if (isMicActive) stopWebMic(); else startWebMic();
-  });
+  if (btnMic) {
+    btnMic.addEventListener('click', () => {
+      if (isMicActive) stopWebMic(); else startWebMic();
+    });
+  }
 
-  document.getElementById('btnSiri').addEventListener('click', async () => {
-    await triggerAction('siri');
-    if (!isMicActive) {
-      startWebMic();
-    }
-  });
+  const btnSiri = document.getElementById('btnSiri');
+  if (btnSiri) {
+    btnSiri.addEventListener('click', async () => {
+      await triggerAction('siri');
+    });
+  }
 
   window.addEventListener('beforeunload', () => {
     stopWebMic();
@@ -1557,40 +3157,140 @@
   });
 
   // ----------------------------------------------------
-  // Resolution Adaptation
+  // Display Fit Mode & Resolution Management
   // ----------------------------------------------------
-  async function setResolution(w, h) {
+  window.diplayFitMode = localStorage.getItem('diplay_fit_mode') || 'contain';
+
+  function applyFitMode(mode) {
+    window.diplayFitMode = mode;
+    localStorage.setItem('diplay_fit_mode', mode);
+
+    const allScreenEls = [videoCanvas, screen, document.getElementById('carplayVideoTag')].filter(Boolean);
+    allScreenEls.forEach(el => {
+      el.style.objectFit = mode;
+      if (mode === 'fill') {
+        el.style.width = '100vw';
+        el.style.height = '100vh';
+        el.style.maxWidth = '100vw';
+        el.style.maxHeight = '100vh';
+      } else {
+        el.style.width = '100%';
+        el.style.height = '100%';
+        el.style.maxWidth = '100vw';
+        el.style.maxHeight = '100vh';
+      }
+    });
+
+    document.querySelectorAll('.fit-mode-btn').forEach(btn => {
+      if (btn.getAttribute('data-fit') === mode) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+
+    updateResolutionDisplay();
+  }
+
+  function updateResolutionDisplay() {
+    let modeText = '等比居中';
+    if (window.diplayFitMode === 'fill') modeText = '全屏铺满';
+    else if (window.diplayFitMode === 'cover') modeText = '等比裁切';
+
+    let aspectText = '';
+    const w = currentWidth || 0;
+    const h = currentHeight || 0;
+    if (w && h) {
+      const r = w / h;
+      if (Math.abs(r - 16/9) < 0.08) aspectText = '16:9';
+      else if (Math.abs(r - 8/3) < 0.15) aspectText = '8:3';
+      else if (Math.abs(r - 4/3) < 0.08) aspectText = '4:3';
+      else aspectText = r.toFixed(2) + ':1';
+      tagResolution.textContent = `${w} × ${h}`;
+      tagResolution.title = `投屏分辨率: ${w}×${h} (${aspectText}) · 视口填充: ${modeText} (点击切换尺寸)`;
+    } else {
+      tagResolution.textContent = `-- × --`;
+      tagResolution.title = `等待出流尺寸 · 视口填充: ${modeText} (点击切换尺寸)`;
+    }
+
+    const streamTag = document.getElementById('currentStreamTag');
+    if (streamTag && w && h) {
+      streamTag.textContent = `${w}×${h} (${aspectText || '硬件流'})`;
+    }
+  }
+
+  // Initialize saved fit mode
+  setTimeout(() => applyFitMode(window.diplayFitMode), 100);
+
+  // Wire fit mode buttons
+  document.querySelectorAll('.fit-mode-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const mode = btn.getAttribute('data-fit');
+      applyFitMode(mode);
+    });
+  });
+
+  // Track pending resolution choice
+  let pendingRes = null;
+
+  async function persistResolution(w, h) {
+    const payload = JSON.stringify({ type: 'resolution', width: w, height: h });
     if (wsConnected && ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'resolution', width: w, height: h }));
-      tagResolution.textContent = w + ' × ' + h;
-      aspectHint.style.display = 'none';
-      resPopover.classList.remove('show');
-      btnToggleRes.classList.remove('active-pop');
-      return;
+      ws.send(payload);
     }
     try {
-      const resp = await fetch('/api/resolution', {
+      await fetch('/api/resolution', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ width: w, height: h })
       });
-      if (resp.ok) {
-        tagResolution.textContent = w + ' × ' + h;
-        aspectHint.style.display = 'none';
-        resPopover.classList.remove('show');
-        btnToggleRes.classList.remove('active-pop');
-      }
     } catch (e) {
-      alert('分辨率切换失败: ' + e.message);
+      console.warn('HTTP resolution post error:', e);
     }
   }
+
+  async function applyAndReconnect(w, h) {
+    await persistResolution(w, h);
+    resPopover.classList.remove('show');
+    btnToggleRes.classList.remove('active-pop');
+    statusBadge.classList.add('idle');
+    statusText.textContent = '重新协商中...';
+    tagFpsLatency.textContent = '重连中...';
+    
+    try {
+      await fetch('/api/reconnect?restart=true');
+    } catch (e) {
+      console.warn('Reconnect fetch error:', e);
+    }
+
+    alert(`🔄 已向树莓派发送新尺寸 (${w} × ${h})！\n\n树莓派正通过蓝牙唤醒 iPhone 重新协商握手，预计 3~5 秒内自动出流。`);
+  }
+
+  // ----------------------------------------------------
+  // Dynamic FPS Liveness Updater
+  // Note: iPhone CarKit video encoder naturally pauses H.264
+  // packet transmission when the CarPlay UI is completely static to save power & bandwidth.
+  // The screen stays 100% crisp and active, never dimmed!
+  // ----------------------------------------------------
+  let lastVideoPacketTime = performance.now();
+  setInterval(() => {
+    if (hasReceivedVideoFrame) {
+      const idleTime = performance.now() - lastVideoPacketTime;
+      if (idleTime > 2500) {
+        updateFpsDisplay(0, '静止画面节能中');
+      }
+      if (videoCanvas) {
+        videoCanvas.style.opacity = '1';
+      }
+    }
+  }, 1000);
 
   function computeAutoFitDimensions() {
     const rawW = window.innerWidth;
     const rawH = window.innerHeight;
     const aspect = (rawW && rawH) ? (rawW / rawH) : (16 / 9);
 
-    // Guarantee pristine HD clarity: Minimum 1280x720, default 1920x1080 baseline for flawless text
     let targetW = 1920;
     let targetH = Math.round(1920 / aspect);
 
@@ -1607,7 +3307,7 @@
 
   document.getElementById('btnQuickAdapt').addEventListener('click', () => {
     const fit = computeAutoFitDimensions();
-    setResolution(fit.width, fit.height);
+    applyAndReconnect(fit.width, fit.height);
   });
 
   btnToggleRes.addEventListener('click', () => {
@@ -1616,8 +3316,13 @@
       resPopover.classList.remove('show');
       btnToggleRes.classList.remove('active-pop');
     } else {
+      if (streamModePopover) streamModePopover.classList.remove('show');
+      if (btnStreamMode) btnStreamMode.classList.remove('active-pop');
+      if (wifiPopover) wifiPopover.classList.remove('show');
+      if (btnWifiMode) btnWifiMode.classList.remove('active-pop');
       const fit = computeAutoFitDimensions();
       document.getElementById('autoFitDimensions').textContent = fit.width + '×' + fit.height;
+      updateResolutionDisplay();
       resPopover.classList.add('show');
       btnToggleRes.classList.add('active-pop');
     }
@@ -1630,50 +3335,76 @@
 
   document.querySelectorAll('.res-item').forEach(item => {
     item.addEventListener('click', () => {
+      document.querySelectorAll('.res-item').forEach(el => el.classList.remove('current'));
+      item.classList.add('current');
+
       const w = item.getAttribute('data-w');
       const h = item.getAttribute('data-h');
       if (w === 'auto') {
         const fit = computeAutoFitDimensions();
-        setResolution(fit.width, fit.height);
+        pendingRes = { width: fit.width, height: fit.height };
       } else if (w === 'native') {
-        setResolution(1080, 2228);
+        pendingRes = { width: 1080, height: 2228 };
       } else {
-        setResolution(parseInt(w, 10), parseInt(h, 10));
+        pendingRes = { width: parseInt(w, 10), height: parseInt(h, 10) };
       }
     });
   });
 
-  // ----------------------------------------------------
-  // Fluidity & Quality Switcher (Defaults to 90% Visual Lossless Champion)
-  // ----------------------------------------------------
-  let currentQuality = 90;
-  const qualityBtn = document.getElementById('btnQuality');
-  const qualityLabel = document.getElementById('qualityLabel');
-  qualityBtn.addEventListener('click', async () => {
-    if (currentQuality === 90) {
-      currentQuality = 75;
-      qualityLabel.textContent = '画质: 极速流畅 (75% / 55FPS)';
-    } else if (currentQuality === 75) {
-      currentQuality = 95;
-      qualityLabel.textContent = '画质: 极限保真 (95% 无损)';
-    } else {
-      currentQuality = 90;
-      qualityLabel.textContent = '画质: 原画超清 (90% 推荐)';
+  document.getElementById('btnSaveResOnly').addEventListener('click', async () => {
+    if (!pendingRes) {
+      alert('请先在上方列表中点击选择一个分辨率！');
+      return;
     }
-    await triggerAction('quality_' + currentQuality);
+    await persistResolution(pendingRes.width, pendingRes.height);
+    resPopover.classList.remove('show');
+    btnToggleRes.classList.remove('active-pop');
+    alert(`✅ 已保存默认分辨率：${pendingRes.width} × ${pendingRes.height}。\n\n💡 提示：CarPlay 分辨率由 iPhone 在初次握手时协商锁定。新分辨率已存入树莓派，将在下次 iPhone 连接时自动生效；当前会话保持正常运行，不会中途掐断。`);
   });
 
-  // Snapshot
-  // High-Resolution Snapshot Capture (supports pixel-perfect Canvas capture)
-  document.getElementById('btnSnapshot').addEventListener('click', () => {
-    if (hasReceivedVideoFrame && videoCanvas && videoCanvas.width > 0) {
-      const a = document.createElement('a');
-      a.href = videoCanvas.toDataURL('image/jpeg', 0.98);
-      a.download = 'carplay_hd_' + Date.now() + '.jpg';
-      a.click();
-    } else {
-      window.open('/snapshot?t=' + Date.now(), '_blank');
+  document.getElementById('btnApplyAndReconnect').addEventListener('click', async () => {
+    if (!pendingRes) {
+      alert('请先在上方列表中点击选择一个分辨率！');
+      return;
     }
+    await applyAndReconnect(pendingRes.width, pendingRes.height);
+  });
+
+  // ----------------------------------------------------
+  // H.264 Direct Passthrough & Stream Mode Info
+  // ----------------------------------------------------
+  const qualityBtn = document.getElementById('btnQuality');
+  if (qualityBtn) {
+    qualityBtn.addEventListener('click', () => {
+      alert('💎 视频流模式说明：\n\n当前采用 iPhone 原生 H.264 硬件直通推流，树莓派零损耗中转，由浏览器 WebCodecs GPU 满血硬解（支持 60 FPS）。\n\n如需调节清晰度或提升帧率，请点击【画幅】切换为【🚀 720P 极速宽屏】或【🖥️ 1080P 宽屏】！');
+    });
+  }
+
+  // Snapshot
+  // High-Resolution Snapshot Capture (supports pixel-perfect Canvas and Video capture)
+  document.getElementById('btnSnapshot').addEventListener('click', () => {
+    const videoTag = document.getElementById('carplayVideoTag');
+    if (hasReceivedVideoFrame) {
+      if (videoCanvas && videoCanvas.width > 0 && (currentStreamMode === 'canvas_mirror' || hasWebCodecs)) {
+        const a = document.createElement('a');
+        a.href = videoCanvas.toDataURL('image/jpeg', 0.98);
+        a.download = 'carplay_hd_' + Date.now() + '.jpg';
+        a.click();
+        return;
+      } else if (videoTag && videoTag.videoWidth > 0) {
+        const snapCanvas = document.createElement('canvas');
+        snapCanvas.width = videoTag.videoWidth;
+        snapCanvas.height = videoTag.videoHeight;
+        const snapCtx = snapCanvas.getContext('2d');
+        snapCtx.drawImage(videoTag, 0, 0);
+        const a = document.createElement('a');
+        a.href = snapCanvas.toDataURL('image/jpeg', 0.98);
+        a.download = 'carplay_hd_' + Date.now() + '.jpg';
+        a.click();
+        return;
+      }
+    }
+    window.open('/snapshot?t=' + Date.now(), '_blank');
   });
 
   // Fullscreen
@@ -1683,6 +3414,1041 @@
       document.documentElement.requestFullscreen().catch(() => {});
     } else {
       document.exitFullscreen().catch(() => {});
+    }
+  });
+
+  // ----------------------------------------------------
+  // Touchscreen Calibration & Orientation Management
+  // ----------------------------------------------------
+  const calibPopover = document.getElementById('calibPopover');
+  const btnTouchCalib = document.getElementById('btnTouchCalib');
+  const btnCloseCalibPopover = document.getElementById('btnCloseCalibPopover');
+  const btnTriggerScreenCalib = document.getElementById('btnTriggerScreenCalib');
+  const btnToggleTouchOrient = document.getElementById('btnToggleTouchOrient');
+  const btnResetGoldenTouch = document.getElementById('btnResetGoldenTouch');
+  const curOrientName = document.getElementById('curOrientName');
+  const liveTouchCoord = document.getElementById('liveTouchCoord');
+  let calibPollTimer = null;
+
+  async function updateCalibStatus() {
+    try {
+      const res = await fetch('/api/calib?action=status');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.presetName) {
+          curOrientName.textContent = data.presetName;
+        }
+        if (data.touchX !== undefined && data.touchX >= 0) {
+          liveTouchCoord.innerHTML = `屏幕: <span style="color:#38bdf8;">(${data.touchX}, ${data.touchY})</span> | 硬件ADC: <span style="color:#fbbf24;">(${data.rawX}, ${data.rawY})</span>`;
+        } else if (data.calibrating) {
+          liveTouchCoord.innerHTML = `<span style="color:#f59e0b;">校准向导进行中: 步骤 ${data.calibStep+1}/4</span>`;
+        }
+      }
+    } catch (_) {}
+  }
+
+  if (btnTouchCalib) {
+    btnTouchCalib.addEventListener('click', () => {
+      const isOpen = calibPopover.classList.contains('show');
+      if (isOpen) {
+        calibPopover.classList.remove('show');
+        btnTouchCalib.classList.remove('active-pop');
+        if (calibPollTimer) clearInterval(calibPollTimer);
+      } else {
+        calibPopover.classList.add('show');
+        btnTouchCalib.classList.add('active-pop');
+        updateCalibStatus();
+        if (calibPollTimer) clearInterval(calibPollTimer);
+        calibPollTimer = setInterval(updateCalibStatus, 800);
+      }
+    });
+  }
+
+  if (btnCloseCalibPopover) {
+    btnCloseCalibPopover.addEventListener('click', () => {
+      calibPopover.classList.remove('show');
+      btnTouchCalib.classList.remove('active-pop');
+      if (calibPollTimer) clearInterval(calibPollTimer);
+    });
+  }
+
+  if (btnTriggerScreenCalib) {
+    btnTriggerScreenCalib.addEventListener('click', async () => {
+      try {
+        await fetch('/api/calib?action=start');
+        liveTouchCoord.innerHTML = '<span style="color:#38bdf8;">已触发！请看树莓派小屏幕并点击靶心</span>';
+      } catch (_) {}
+    });
+  }
+
+  if (btnToggleTouchOrient) {
+    btnToggleTouchOrient.addEventListener('click', async () => {
+      try {
+        await fetch('/api/calib?action=toggle');
+        setTimeout(updateCalibStatus, 300);
+      } catch (_) {}
+    });
+  }
+
+  if (btnResetGoldenTouch) {
+    btnResetGoldenTouch.addEventListener('click', async () => {
+      try {
+        await fetch('/api/calib?action=reset');
+        liveTouchCoord.innerHTML = '<span style="color:#10b981;">已恢复官方标准黄金校准！</span>';
+        setTimeout(updateCalibStatus, 300);
+      } catch (_) {}
+    });
+  }
+
+  const btnExitScreenCalib = document.getElementById('btnExitScreenCalib');
+  if (btnExitScreenCalib) {
+    btnExitScreenCalib.addEventListener('click', async () => {
+      try {
+        await fetch('/api/calib?action=exit');
+        liveTouchCoord.innerHTML = '<span style="color:#ef4444;">已退出校准向导，正在返回主界面...</span>';
+        setTimeout(updateCalibStatus, 300);
+      } catch (_) {}
+    });
+  }
+
+  // ================= Wi-Fi & Hotspot Management UI Logic =================
+  const btnWifiMode = document.getElementById('btnWifiMode');
+  const wifiPopover = document.getElementById('wifiPopover');
+  const btnCloseWifiPopover = document.getElementById('btnCloseWifiPopover');
+  const wifiModeBadge = document.getElementById('wifiModeBadge');
+  const wifiModeText = document.getElementById('wifiModeText');
+  const wifiCurrentSsid = document.getElementById('wifiCurrentSsid');
+  const wifiCurrentIp = document.getElementById('wifiCurrentIp');
+  const wifiCoexistHint = document.getElementById('wifiCoexistHint');
+  const btnSwitchToAP = document.getElementById('btnSwitchToAP');
+  const btnSwitchToSTA = document.getElementById('btnSwitchToSTA');
+  const btnScanWifi = document.getElementById('btnScanWifi');
+  const scanWifiIcon = document.getElementById('scanWifiIcon');
+  const wifiListContainer = document.getElementById('wifiListContainer');
+  const wifiConnectForm = document.getElementById('wifiConnectForm');
+  const targetSsidLabel = document.getElementById('targetSsidLabel');
+  const inputWifiPassword = document.getElementById('inputWifiPassword');
+  const btnCancelConnect = document.getElementById('btnCancelConnect');
+  const btnConfirmConnect = document.getElementById('btnConfirmConnect');
+  const wifiNoticeToast = document.getElementById('wifiNoticeToast');
+
+  let currentTargetSSID = '';
+  let wifiPollTimer = null;
+
+  function showWifiToast(msg, isSuccess = true) {
+    if (!wifiNoticeToast) return;
+    wifiNoticeToast.style.display = 'block';
+    wifiNoticeToast.style.background = isSuccess ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)';
+    wifiNoticeToast.style.borderColor = isSuccess ? '#10b981' : '#ef4444';
+    wifiNoticeToast.style.color = isSuccess ? '#6ee7b7' : '#fca5a5';
+    wifiNoticeToast.innerHTML = msg;
+  }
+
+  async function updateWifiStatus() {
+    try {
+      const res = await fetch('/api/wifi/status');
+      if (!res.ok) return;
+      const data = await res.json();
+      
+      // Update badge & text
+      if (data.mode === 'dual') {
+        wifiModeBadge.className = 'status-chip';
+        wifiModeBadge.style.background = 'rgba(139, 92, 246, 0.2)';
+        wifiModeBadge.style.color = '#c084fc';
+        wifiModeText.textContent = '双网卡共存 (AP+外网)';
+      } else if (data.mode === 'ap' || data.ap_active) {
+        wifiModeBadge.className = 'status-chip';
+        wifiModeBadge.style.background = 'rgba(59, 130, 246, 0.2)';
+        wifiModeBadge.style.color = '#60a5fa';
+        const bandText = data.band || '热点';
+        const chanText = data.channel ? ` (信道 ${data.channel})` : '';
+        wifiModeText.textContent = `车载 ${bandText} 热点模式${chanText}`;
+      } else {
+        wifiModeBadge.className = 'status-chip';
+        wifiModeBadge.style.background = 'rgba(16, 185, 129, 0.2)';
+        wifiModeBadge.style.color = '#34d399';
+        wifiModeText.textContent = '已连外部网络 (STA)';
+      }
+
+      wifiCurrentSsid.textContent = data.ssid || (data.ap_active ? 'Tesla-CarPlay' : '未连接');
+      wifiCurrentIp.textContent = data.ip || '--';
+
+      // Update Coexistence hint
+      if (data.multi_radio) {
+        wifiCoexistHint.innerHTML = `
+          <div style="color: #a78bfa; font-weight: 600; margin-bottom: 2px;">✨ 检测到双物理无线网卡 (${data.interfaces.join(', ')})</div>
+          <div>硬件具备独立双射频：车载独立热点与外部网络已实现完美硬件级真共存，互不占用带宽与信道！</div>
+        `;
+      } else {
+        wifiCoexistHint.innerHTML = `
+          <div style="color: #38bdf8; font-weight: 600; margin-bottom: 2px;">ℹ️ 板载单射频网卡 (${data.interfaces && data.interfaces[0] ? data.interfaces[0] : 'wlan0'}) · 运行机制</div>
+          <div>单天线射频无法在不同频段跳频。系统提供<b>一键极速安全切换</b>；若需要两者100%同时共存，插上免驱 USB 无线网卡即可即插即用！</div>
+        `;
+      }
+    } catch (_) {}
+  }
+
+  async function scanWifiList() {
+    if (!wifiListContainer) return;
+    scanWifiIcon.classList.add('spin-icon');
+    wifiListContainer.innerHTML = '<div style="text-align: center; padding: 18px 0; color: #93c5fd; font-size: 0.8rem;">正在扫描周围 2.4G & 5G Wi-Fi 信号...</div>';
+
+    try {
+      const res = await fetch('/api/wifi/scan');
+      const data = await res.json();
+      scanWifiIcon.classList.remove('spin-icon');
+
+      if (!data.ok || !data.networks || data.networks.length === 0) {
+        wifiListContainer.innerHTML = '<div style="text-align: center; padding: 18px 0; color: #94a3b8; font-size: 0.8rem;">未扫描到周围 Wi-Fi，请靠近路由器或再次点击刷新</div>';
+        return;
+      }
+
+      let html = '';
+      data.networks.forEach(n => {
+        const signalBars = n.signal > 75 ? '📶 极好' : (n.signal > 50 ? '📶 良好' : (n.signal > 25 ? '📶 一般' : '📶 较弱'));
+        const isCurrent = n.active;
+        const savedBadge = n.saved ? '<span style="font-size: 0.65rem; background: rgba(59, 130, 246, 0.25); color: #93c5fd; padding: 1px 5px; border-radius: 4px; margin-left: 4px;">已保存</span>' : '';
+        const activeBadge = isCurrent ? '<span style="font-size: 0.65rem; background: rgba(16, 185, 129, 0.25); color: #6ee7b7; padding: 1px 5px; border-radius: 4px; margin-left: 4px;">当前连接</span>' : '';
+
+        html += `
+          <div class="wifi-item ${isCurrent ? 'active' : ''}" data-ssid="${escapeHtml(n.ssid)}">
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-weight: 600; font-size: 0.82rem; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center;">
+                ${escapeHtml(n.ssid)} ${savedBadge} ${activeBadge}
+              </div>
+              <div style="font-size: 0.68rem; color: #94a3b8; margin-top: 2px;">
+                信号 ${n.signal}% (${signalBars}) · ${n.security} · 信道 ${n.channel}
+              </div>
+            </div>
+            <button style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #38bdf8; font-size: 0.72rem; padding: 3px 8px; border-radius: 6px; cursor: pointer;">
+              ${isCurrent ? '已连' : (n.saved ? '连接' : '输入密码')}
+            </button>
+          </div>
+        `;
+      });
+      wifiListContainer.innerHTML = html;
+
+      // Add click listeners to items
+      wifiListContainer.querySelectorAll('.wifi-item').forEach(el => {
+        el.addEventListener('click', () => {
+          const ssid = el.getAttribute('data-ssid');
+          openConnectForm(ssid);
+        });
+      });
+    } catch (e) {
+      scanWifiIcon.classList.remove('spin-icon');
+      wifiListContainer.innerHTML = '<div style="text-align: center; padding: 18px 0; color: #ef4444; font-size: 0.8rem;">扫描请求失败，请稍后重试</div>';
+    }
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  }
+
+  function openConnectForm(ssid) {
+    currentTargetSSID = ssid;
+    targetSsidLabel.textContent = ssid;
+    inputWifiPassword.value = '';
+    wifiConnectForm.style.display = 'block';
+    inputWifiPassword.focus();
+    wifiConnectForm.scrollIntoView({ behavior: 'smooth' });
+  }
+
+  if (btnCancelConnect) {
+    btnCancelConnect.addEventListener('click', () => {
+      wifiConnectForm.style.display = 'none';
+      currentTargetSSID = '';
+    });
+  }
+
+  if (btnConfirmConnect) {
+    btnConfirmConnect.addEventListener('click', async () => {
+      if (!currentTargetSSID) return;
+      const pwd = inputWifiPassword.value;
+      wifiConnectForm.style.display = 'none';
+      showWifiToast(`⏳ 正在尝试连接 Wi-Fi "${currentTargetSSID}"...<br>若 20 秒未获取到 IP 将自动回滚至车载热点`);
+
+      try {
+        const res = await fetch('/api/wifi/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ssid: currentTargetSSID, password: pwd })
+        });
+        const d = await res.json();
+        if (d.ok) {
+          showWifiToast(`🚀 已触发连接任务！请观察设备是否获得新 IP。<br>若连接失败系统将自动秒级回滚恢复 Tesla-CarPlay。`);
+        } else {
+          showWifiToast(`连接失败: ${d.error || '未知原因'}`, false);
+        }
+      } catch (e) {
+        showWifiToast(`请求已发送，设备正在切网中... 若未连上将在20秒内自动恢复热点。`);
+      }
+    });
+  }
+
+  if (btnSwitchToAP) {
+    btnSwitchToAP.addEventListener('click', async () => {
+      if (!confirm('确定切换至车载热点 (Tesla-CarPlay) 吗？\n切换后树莓派将广播独立热点，IP 将变为 100.96.0.1')) return;
+      showWifiToast('⏳ 正在开启车载热点 (Tesla-CarPlay)... 请连接 Tesla-CarPlay 后访问 100.96.0.1');
+      try {
+        await fetch('/api/wifi/mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'ap' })
+        });
+      } catch (_) {}
+    });
+  }
+
+  if (btnSwitchToSTA) {
+    btnSwitchToSTA.addEventListener('click', async () => {
+      showWifiToast('⏳ 正在切换至已保存家庭/手机 Wi-Fi... 若失败将自动回滚至车载热点');
+      try {
+        const res = await fetch('/api/wifi/mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'sta' })
+        });
+        const d = await res.json();
+        if (d.ok) {
+          showWifiToast(d.message);
+        } else {
+          showWifiToast(d.error || '切换失败', false);
+        }
+      } catch (_) {}
+    });
+  }
+
+  if (btnScanWifi) {
+    btnScanWifi.addEventListener('click', scanWifiList);
+  }
+
+  if (btnWifiMode) {
+    btnWifiMode.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = wifiPopover.classList.contains('show');
+      if (isOpen) {
+        wifiPopover.classList.remove('show');
+        btnWifiMode.classList.remove('active-pop');
+        if (wifiPollTimer) clearInterval(wifiPollTimer);
+      } else {
+        // Close others
+        if (calibPopover) calibPopover.classList.remove('show');
+        if (btnTouchCalib) btnTouchCalib.classList.remove('active-pop');
+        if (resPopover) resPopover.classList.remove('show');
+        if (btnToggleRes) btnToggleRes.classList.remove('active-pop');
+        if (streamModePopover) streamModePopover.classList.remove('show');
+        if (btnStreamMode) btnStreamMode.classList.remove('active-pop');
+
+        wifiPopover.classList.add('show');
+        btnWifiMode.classList.add('active-pop');
+        updateWifiStatus();
+        if (wifiPollTimer) clearInterval(wifiPollTimer);
+        wifiPollTimer = setInterval(updateWifiStatus, 3000);
+      }
+    });
+  }
+
+  if (btnCloseWifiPopover) {
+    btnCloseWifiPopover.addEventListener('click', () => {
+      wifiPopover.classList.remove('show');
+      btnWifiMode.classList.remove('active-pop');
+      if (wifiPollTimer) clearInterval(wifiPollTimer);
+    });
+  }
+
+  const btnEnableHttps = document.getElementById('btnEnableHttps');
+  if (btnEnableHttps) {
+    if (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+      btnEnableHttps.style.display = 'none';
+    } else {
+      btnEnableHttps.style.display = 'inline-flex';
+      btnEnableHttps.addEventListener('click', () => {
+        window.location.href = 'https://' + location.hostname + ':8443';
+      });
+    }
+  }
+
+  // ----------------------------------------------------
+  // Immersive Mode & Global Toast System
+  // ----------------------------------------------------
+  let isImmersiveMode = false;
+  let toastTimer = null;
+
+  function showToast(msg, duration = 2500) {
+    const toast = document.getElementById('globalToast');
+    if (!toast) return;
+    toast.innerHTML = msg;
+    toast.style.display = 'block';
+    setTimeout(() => toast.classList.add('show'), 10);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => { toast.style.display = 'none'; }, 300);
+    }, duration);
+  }
+
+  const immersiveTrigger = document.getElementById('immersiveRestoreTrigger');
+  const btnHeaderImmersive = document.getElementById('btnToggleImmersive');
+  const btnDockImmersive = document.getElementById('btnDockImmersive');
+
+  function toggleImmersiveMode(forceState) {
+    if (typeof forceState === 'boolean') {
+      isImmersiveMode = forceState;
+    } else {
+      isImmersiveMode = !isImmersiveMode;
+    }
+
+    if (isImmersiveMode) {
+      document.body.classList.add('immersive-mode');
+      if (immersiveTrigger) immersiveTrigger.style.display = 'flex';
+
+      // Close all open menus / popovers
+      if (resPopover) resPopover.classList.remove('show');
+      if (btnToggleRes) btnToggleRes.classList.remove('active-pop');
+      if (calibPopover) calibPopover.classList.remove('show');
+      if (btnTouchCalib) btnTouchCalib.classList.remove('active-pop');
+      if (terminalModal) terminalModal.classList.remove('open');
+      if (btnTerminal) btnTerminal.classList.remove('active-pop');
+      if (wifiPopover) wifiPopover.classList.remove('show');
+      if (btnWifiMode) btnWifiMode.classList.remove('active-pop');
+      if (streamModePopover) streamModePopover.classList.remove('show');
+      if (btnStreamMode) btnStreamMode.classList.remove('active-pop');
+      if (aspectHint) aspectHint.style.display = 'none';
+
+      showToast('✨ 已进入沉浸模式！点击右上角【👁️ 唤出菜单】或按键盘 H 键可随时恢复', 3200);
+    } else {
+      document.body.classList.remove('immersive-mode');
+      if (immersiveTrigger) immersiveTrigger.style.display = 'none';
+      showToast('👁️ 已恢复菜单与操作面板', 1800);
+    }
+  }
+
+  // ----------------------------------------------------
+  // Built-in Web Terminal & Diagnostic Console
+  // ----------------------------------------------------
+  const terminalModal = document.getElementById('terminalModal');
+  const btnTerminal = document.getElementById('btnTerminal');
+  const termBtnClose = document.getElementById('termBtnClose');
+  const termBtnClear = document.getElementById('termBtnClear');
+  const termBtnCopy = document.getElementById('termBtnCopy');
+  const terminalScreen = document.getElementById('terminalScreen');
+  const terminalInput = document.getElementById('terminalInput');
+  const termBtnSubmit = document.getElementById('termBtnSubmit');
+  const termAutoScroll = document.getElementById('termAutoScroll');
+  const termStatusBadge = document.getElementById('termStatusBadge');
+
+  function appendTerminalOutput(text, type = 'normal') {
+    if (!terminalScreen) return;
+    const div = document.createElement('div');
+    if (type === 'cmd') {
+      div.style.color = '#38bdf8';
+      div.style.fontWeight = '700';
+      div.style.marginTop = '8px';
+      div.textContent = `pi@diplay:~$ ${text}`;
+    } else if (type === 'error') {
+      div.style.color = '#f87171';
+      div.textContent = text;
+    } else if (type === 'success') {
+      div.style.color = '#34d399';
+      div.textContent = text;
+    } else {
+      div.style.color = '#cbd5e1';
+      div.textContent = text;
+    }
+    terminalScreen.appendChild(div);
+    if (termAutoScroll && termAutoScroll.checked) {
+      terminalScreen.scrollTop = terminalScreen.scrollHeight;
+    }
+  }
+
+  async function runTerminalCommand(cmd) {
+    if (!cmd || !cmd.trim()) return;
+    cmd = cmd.trim();
+    appendTerminalOutput(cmd, 'cmd');
+    if (termStatusBadge) {
+      termStatusBadge.textContent = '执行中...';
+      termStatusBadge.style.borderColor = '#f59e0b';
+      termStatusBadge.style.color = '#fbbf24';
+    }
+    try {
+      const res = await fetch('/api/terminal/exec', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cmd })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        appendTerminalOutput(data.output || '(命令执行完成，无标准输出)');
+        if (termStatusBadge) {
+          termStatusBadge.textContent = '就绪';
+          termStatusBadge.style.borderColor = '#10b981';
+          termStatusBadge.style.color = '#6ee7b7';
+        }
+      } else {
+        appendTerminalOutput(data.output || '执行失败', 'error');
+        if (termStatusBadge) {
+          termStatusBadge.textContent = `返回码: ${data.exitCode}`;
+          termStatusBadge.style.borderColor = '#ef4444';
+          termStatusBadge.style.color = '#f87171';
+        }
+      }
+    } catch (err) {
+      appendTerminalOutput(`[网络请求错误] ${err.message}`, 'error');
+      if (termStatusBadge) {
+        termStatusBadge.textContent = '网络断开';
+        termStatusBadge.style.borderColor = '#ef4444';
+        termStatusBadge.style.color = '#f87171';
+      }
+    }
+  }
+
+  if (btnTerminal) {
+    btnTerminal.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = terminalModal.classList.contains('open');
+      if (isOpen) {
+        terminalModal.classList.remove('open');
+        btnTerminal.classList.remove('active-pop');
+      } else {
+        terminalModal.classList.add('open');
+        btnTerminal.classList.add('active-pop');
+        if (terminalInput) terminalInput.focus();
+      }
+    });
+  }
+
+  if (termBtnClose) {
+    termBtnClose.addEventListener('click', () => {
+      if (terminalModal) terminalModal.classList.remove('open');
+      if (btnTerminal) btnTerminal.classList.remove('active-pop');
+    });
+  }
+
+  if (termBtnClear) {
+    termBtnClear.addEventListener('click', () => {
+      if (terminalScreen) terminalScreen.innerHTML = '';
+    });
+  }
+
+  if (termBtnCopy) {
+    termBtnCopy.addEventListener('click', () => {
+      if (!terminalScreen) return;
+      navigator.clipboard.writeText(terminalScreen.innerText).then(() => {
+        showToast('📋 终端输出已复制到剪贴板！');
+      }).catch(() => {
+        showToast('复制失败，请手动选取');
+      });
+    });
+  }
+
+  // ----------------------------------------------------------------------
+  // Offline QR Code Generator & Diagnostic Log Exporter
+  // ----------------------------------------------------------------------
+  const termBtnExportQr = document.getElementById('termBtnExportQr');
+  const logQrModal = document.getElementById('logQrModal');
+  const btnCloseQrModal = document.getElementById('btnCloseQrModal');
+  const btnCopyDownloadUrl = document.getElementById('btnCopyDownloadUrl');
+  const btnDirectDownloadLog = document.getElementById('btnDirectDownloadLog');
+  const qrCanvas = document.getElementById('qrCanvas');
+  const qrLogSizeText = document.getElementById('qrLogSizeText');
+  let currentLogDownloadUrl = '';
+
+  if (btnCloseQrModal && logQrModal) {
+    btnCloseQrModal.addEventListener('click', () => {
+      logQrModal.style.display = 'none';
+    });
+  }
+
+  if (btnCopyDownloadUrl) {
+    btnCopyDownloadUrl.addEventListener('click', () => {
+      if (!currentLogDownloadUrl) return;
+      navigator.clipboard.writeText(currentLogDownloadUrl).then(() => {
+        showToast('📋 日志下载直链已复制！');
+      }).catch(() => {
+        prompt('请手动复制下载链接:', currentLogDownloadUrl);
+      });
+    });
+  }
+
+  if (termBtnExportQr) {
+    termBtnExportQr.addEventListener('click', async () => {
+      const logs = terminalScreen ? terminalScreen.innerText : '';
+      const origText = termBtnExportQr.innerHTML;
+      termBtnExportQr.innerHTML = '<span>⏳ 准备日志中...</span>';
+
+      try {
+        const res = await fetch('/api/terminal/export', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ logs: logs })
+        });
+        const data = await res.json();
+        if (data.ok && data.downloadUrl) {
+          currentLogDownloadUrl = data.downloadUrl;
+          if (btnDirectDownloadLog) btnDirectDownloadLog.href = data.downloadUrl;
+          if (qrLogSizeText) {
+            const kb = (data.sizeBytes / 1024).toFixed(1);
+            qrLogSizeText.textContent = `共 ${kb} KB`;
+          }
+
+          // Draw offline QR Code to Canvas
+          if (qrCanvas) {
+            drawOfflineQrCode(qrCanvas, data.downloadUrl);
+          }
+
+          if (logQrModal) logQrModal.style.display = 'flex';
+        } else {
+          showToast('生成下载日志失败: ' + (data.error || '未知错误'));
+        }
+      } catch (err) {
+        showToast('请求生成日志失败: ' + err);
+      } finally {
+        termBtnExportQr.innerHTML = origText;
+      }
+    });
+  }
+
+  /**
+   * Pure Vanilla JS Offline QR Code Generator (Zero external dependencies)
+   * Generates standard ISO/IEC 18004 QR Code Version 4/5 (Byte Mode)
+   */
+  function drawOfflineQrCode(canvas, text) {
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+
+    // Minimal self-contained QR encoder for URLs up to 100 bytes
+    try {
+      const qrMatrix = generateQrMatrix(text);
+      const size = qrMatrix.length;
+      const margin = 4;
+      const totalModules = size + margin * 2;
+      const moduleSize = Math.floor(width / totalModules);
+      const offset = Math.floor((width - moduleSize * totalModules) / 2) + margin * moduleSize;
+
+      ctx.fillStyle = '#000000';
+      for (let r = 0; r < size; r++) {
+        for (let c = 0; c < size; c++) {
+          if (qrMatrix[r][c]) {
+            ctx.fillRect(offset + c * moduleSize, offset + r * moduleSize, moduleSize, moduleSize);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('QR render fallback:', e);
+      // Fallback display
+      ctx.fillStyle = '#0f172a';
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('请长按下方直链下载', width / 2, height / 2);
+    }
+  }
+
+  // --- GF(256) & Reed-Solomon Error Correction Engine ---
+  const GF256_EXP = new Uint8Array(512);
+  const GF256_LOG = new Uint8Array(256);
+  (function initGF256() {
+    let x = 1;
+    for (let i = 0; i < 255; i++) {
+      GF256_EXP[i] = x;
+      GF256_LOG[x] = i;
+      x <<= 1;
+      if (x & 0x100) x ^= 0x11d;
+    }
+    for (let i = 255; i < 512; i++) GF256_EXP[i] = GF256_EXP[i - 255];
+  })();
+
+  function gfMul(x, y) {
+    if (x === 0 || y === 0) return 0;
+    return GF256_EXP[GF256_LOG[x] + GF256_LOG[y]];
+  }
+
+  function rsPolyMul(p1, p2) {
+    const r = new Uint8Array(p1.length + p2.length - 1);
+    for (let i = 0; i < p1.length; i++) {
+      for (let j = 0; j < p2.length; j++) {
+        r[i + j] ^= gfMul(p1[i], p2[j]);
+      }
+    }
+    return r;
+  }
+
+  function rsGenPoly(numEc) {
+    let poly = new Uint8Array([1]);
+    for (let i = 0; i < numEc; i++) {
+      poly = rsPolyMul(poly, new Uint8Array([1, GF256_EXP[i]]));
+    }
+    return poly;
+  }
+
+  function rsCalculateEc(data, numEc) {
+    const gen = rsGenPoly(numEc);
+    const result = new Uint8Array(numEc);
+    for (let i = 0; i < data.length; i++) {
+      const factor = data[i] ^ result[0];
+      for (let j = 0; j < numEc - 1; j++) {
+        result[j] = result[j + 1] ^ gfMul(gen[j + 1], factor);
+      }
+      result[numEc - 1] = gfMul(gen[numEc], factor);
+    }
+    return result;
+  }
+
+  function generateQrMatrix(text) {
+    // UTF-8 encode
+    const utf8 = [];
+    for (let i = 0; i < text.length; i++) {
+      let c = text.charCodeAt(i);
+      if (c < 128) utf8.push(c);
+      else if (c < 2048) { utf8.push(192 | (c >> 6), 128 | (c & 63)); }
+      else { utf8.push(224 | (c >> 12), 128 | ((c >> 6) & 63), 128 | (c & 63)); }
+    }
+
+    // Version selection: Version 4-L (80 data bytes) or Version 5-L (108 data bytes)
+    let version = 4;
+    let dataCapacity = 80;
+    let numEc = 20;
+    let size = 33;
+    let alignPos = [6, 26];
+
+    if (utf8.length > 76) {
+      version = 6;
+      dataCapacity = 136;
+      numEc = 28;
+      size = 41;
+      alignPos = [6, 34];
+    }
+
+    // Byte mode (0100) + length (8 bits for v1-9) + data + terminator (0000)
+    const bits = [];
+    function pushBits(val, len) {
+      for (let i = len - 1; i >= 0; i--) bits.push((val >> i) & 1);
+    }
+    pushBits(0b0100, 4);
+    pushBits(utf8.length, 8);
+    for (let i = 0; i < utf8.length; i++) pushBits(utf8[i], 8);
+    pushBits(0, Math.min(4, dataCapacity * 8 - bits.length));
+    while (bits.length % 8 !== 0) bits.push(0);
+
+    const dataBytes = new Uint8Array(dataCapacity);
+    for (let i = 0; i < bits.length / 8; i++) {
+      let b = 0;
+      for (let j = 0; j < 8; j++) b = (b << 1) | bits[i * 8 + j];
+      dataBytes[i] = b;
+    }
+    // Pad bytes
+    const padBytes = [0xec, 0x11];
+    let padIdx = 0;
+    for (let i = bits.length / 8; i < dataCapacity; i++) {
+      dataBytes[i] = padBytes[padIdx % 2];
+      padIdx++;
+    }
+
+    // Error correction
+    const ecBytes = rsCalculateEc(dataBytes, numEc);
+    const finalCodewords = new Uint8Array(dataCapacity + numEc);
+    finalCodewords.set(dataBytes, 0);
+    finalCodewords.set(ecBytes, dataCapacity);
+
+    // Initialize Matrix
+    const matrix = Array.from({ length: size }, () => Array(size).fill(null));
+    const reserved = Array.from({ length: size }, () => Array(size).fill(false));
+
+    function setFinder(startR, startC) {
+      for (let r = 0; r < 7; r++) {
+        for (let c = 0; c < 7; c++) {
+          const isBlack = (r === 0 || r === 6 || c === 0 || c === 6 || (r >= 2 && r <= 4 && c >= 2 && c <= 4));
+          matrix[startR + r][startC + c] = isBlack;
+          reserved[startR + r][startC + c] = true;
+        }
+      }
+      // Separator
+      for (let r = -1; r <= 7; r++) {
+        for (let c = -1; c <= 7; c++) {
+          const nr = startR + r, nc = startC + c;
+          if (nr >= 0 && nr < size && nc >= 0 && nc < size) reserved[nr][nc] = true;
+        }
+      }
+    }
+
+    setFinder(0, 0);
+    setFinder(0, size - 7);
+    setFinder(size - 7, 0);
+
+    // Alignment Pattern
+    for (let r of alignPos) {
+      for (let c of alignPos) {
+        if (reserved[r][c]) continue;
+        for (let dr = -2; dr <= 2; dr++) {
+          for (let dc = -2; dc <= 2; dc++) {
+            matrix[r + dr][c + dc] = (Math.max(Math.abs(dr), Math.abs(dc)) !== 1);
+            reserved[r + dr][c + dc] = true;
+          }
+        }
+      }
+    }
+
+    // Timing Patterns
+    for (let i = 8; i < size - 8; i++) {
+      if (!reserved[6][i]) { matrix[6][i] = (i % 2 === 0); reserved[6][i] = true; }
+      if (!reserved[i][6]) { matrix[i][6] = (i % 2 === 0); reserved[i][6] = true; }
+    }
+
+    // Dark Module
+    matrix[4 * version + 9][8] = true;
+    reserved[4 * version + 9][8] = true;
+
+    // Reserve Format info area
+    for (let i = 0; i < 9; i++) { reserved[8][i] = true; reserved[i][8] = true; }
+    for (let i = 0; i < 8; i++) { reserved[8][size - 1 - i] = true; reserved[size - 1 - i][8] = true; }
+
+    // Place Codewords (Zig-Zag upward/downward)
+    let bitIdx = 0;
+    const totalBits = finalCodewords.length * 8;
+    let upward = true;
+    for (let right = size - 1; right > 0; right -= 2) {
+      if (right === 6) right--; // Skip vertical timing pattern
+      const rows = upward ? Array.from({ length: size }, (_, i) => size - 1 - i) : Array.from({ length: size }, (_, i) => i);
+      for (let r of rows) {
+        for (let c of [right, right - 1]) {
+          if (!reserved[r][c]) {
+            let bitVal = false;
+            if (bitIdx < totalBits) {
+              const byteI = Math.floor(bitIdx / 8);
+              const bitI = 7 - (bitIdx % 8);
+              bitVal = Boolean((finalCodewords[byteI] >> bitI) & 1);
+              bitIdx++;
+            }
+            // Apply Mask 0: (row + col) % 2 === 0
+            const mask = ((r + c) % 2 === 0);
+            matrix[r][c] = mask ? !bitVal : bitVal;
+          }
+        }
+      }
+      upward = !upward;
+    }
+
+    // Format Info: ECC Level L (01) + Mask 0 (000) = 01000b -> with BCH = 0x77c4 ^ 0x5412 = 0x23d6
+    // Standard Level L Mask 0 format bits
+    const fmt = [1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0];
+    for (let i = 0; i < 6; i++) matrix[8][i] = Boolean(fmt[i]);
+    matrix[8][7] = Boolean(fmt[6]);
+    matrix[8][8] = Boolean(fmt[7]);
+    matrix[7][8] = Boolean(fmt[8]);
+    for (let i = 9; i < 15; i++) matrix[14 - i][8] = Boolean(fmt[i]);
+
+    for (let i = 0; i < 8; i++) matrix[size - 1 - i][8] = Boolean(fmt[i]);
+    for (let i = 8; i < 15; i++) matrix[8][size - 15 + i] = Boolean(fmt[i]);
+
+    return matrix;
+  }
+
+  if (termBtnSubmit) {
+    termBtnSubmit.addEventListener('click', () => {
+      if (!terminalInput) return;
+      const cmd = terminalInput.value;
+      terminalInput.value = '';
+      runTerminalCommand(cmd);
+    });
+  }
+
+  if (terminalInput) {
+    terminalInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const cmd = terminalInput.value;
+        terminalInput.value = '';
+        runTerminalCommand(cmd);
+      }
+    });
+  }
+
+  document.querySelectorAll('.term-chip-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const cmd = btn.getAttribute('data-cmd');
+      if (cmd) {
+        if (terminalInput) terminalInput.value = cmd;
+        runTerminalCommand(cmd);
+      }
+    });
+  });
+
+  // ----------------------------------------------------
+  // Stream Mode (Anti-Blackout Plan A / Plan B) Switcher
+  // ----------------------------------------------------
+  const btnStreamMode = document.getElementById('btnStreamMode');
+  const streamModePopover = document.getElementById('streamModePopover');
+  const btnCloseStreamModePopover = document.getElementById('btnCloseStreamModePopover');
+  const btnSelectPlanA = document.getElementById('btnSelectPlanA');
+  const btnSelectPlanB = document.getElementById('btnSelectPlanB');
+
+  if (btnStreamMode && streamModePopover) {
+    btnStreamMode.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = streamModePopover.classList.contains('show');
+      if (isOpen) {
+        streamModePopover.classList.remove('show');
+        btnStreamMode.classList.remove('active-pop');
+      } else {
+        // Close other popovers
+        if (resPopover) resPopover.classList.remove('show');
+        if (btnToggleRes) btnToggleRes.classList.remove('active-pop');
+        if (calibPopover) calibPopover.classList.remove('show');
+        if (btnTouchCalib) btnTouchCalib.classList.remove('active-pop');
+        if (wifiPopover) wifiPopover.classList.remove('show');
+        if (btnWifiMode) btnWifiMode.classList.remove('active-pop');
+
+        streamModePopover.classList.add('show');
+        btnStreamMode.classList.add('active-pop');
+      }
+    });
+  }
+
+  if (btnCloseStreamModePopover && streamModePopover) {
+    btnCloseStreamModePopover.addEventListener('click', () => {
+      streamModePopover.classList.remove('show');
+      if (btnStreamMode) btnStreamMode.classList.remove('active-pop');
+    });
+  }
+
+  // Click top status badge to toggle stream mode popover
+  if (statusBadge && streamModePopover) {
+    statusBadge.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = streamModePopover.classList.contains('show');
+      if (isOpen) {
+        streamModePopover.classList.remove('show');
+        if (btnStreamMode) btnStreamMode.classList.remove('active-pop');
+      } else {
+        if (resPopover) resPopover.classList.remove('show');
+        if (btnToggleRes) btnToggleRes.classList.remove('active-pop');
+        if (calibPopover) calibPopover.classList.remove('show');
+        if (btnTouchCalib) btnTouchCalib.classList.remove('active-pop');
+        if (wifiPopover) wifiPopover.classList.remove('show');
+        if (btnWifiMode) btnWifiMode.classList.remove('active-pop');
+
+        streamModePopover.classList.add('show');
+        if (btnStreamMode) btnStreamMode.classList.add('active-pop');
+      }
+    });
+  }
+
+  // Click top resolution tag to toggle resolution picker popover
+  if (tagResolution && resPopover) {
+    tagResolution.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = resPopover.classList.contains('show');
+      if (isOpen) {
+        resPopover.classList.remove('show');
+        if (btnToggleRes) btnToggleRes.classList.remove('active-pop');
+      } else {
+        if (streamModePopover) streamModePopover.classList.remove('show');
+        if (btnStreamMode) btnStreamMode.classList.remove('active-pop');
+        if (wifiPopover) wifiPopover.classList.remove('show');
+        if (btnWifiMode) btnWifiMode.classList.remove('active-pop');
+        const fit = computeAutoFitDimensions();
+        const autoEl = document.getElementById('autoFitDimensions');
+        if (autoEl) autoEl.textContent = fit.width + '×' + fit.height;
+        updateResolutionDisplay();
+        resPopover.classList.add('show');
+        if (btnToggleRes) btnToggleRes.classList.add('active-pop');
+      }
+    });
+  }
+
+  // Click top hardware tag to show detailed diagnostics toast
+  if (tagHardware) {
+    tagHardware.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const st = lastHardwareStats;
+      if (st && st.cpu !== undefined) {
+        const memStr = st.memTotal ? ` | 内存占用: ${st.memUsed || 0}MB / ${st.memTotal}MB (${Math.round(((st.memUsed||0)*100)/st.memTotal)}%)` : '';
+        const warnStr = (st.temp >= 70) ? ' ⚠️ [温度偏高可能引发降频卡顿]' : '';
+        showToast(`🖥️ 树莓派 3B+ 状态: CPU ${st.cpu}% | 核心温度 ${st.temp}°C${memStr}${warnStr}`, 3000);
+      } else {
+        showToast('🖥️ 正在获取树莓派 3B+ 硬件占用数据...', 1500);
+      }
+    });
+  }
+
+  // Click top network diagnosis tag to show detailed stream & Wi-Fi diagnosis
+  if (tagNetDiag) {
+    tagNetDiag.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showNetworkDiagModal();
+    });
+  }
+
+  if (btnSelectPlanA) {
+    btnSelectPlanA.addEventListener('click', () => {
+      applyStreamMode('hardware', true);
+      if (streamModePopover) streamModePopover.classList.remove('show');
+      if (btnStreamMode) btnStreamMode.classList.remove('active-pop');
+    });
+  }
+
+  if (btnSelectPlanB) {
+    btnSelectPlanB.addEventListener('click', () => {
+      applyStreamMode('video_mse', true);
+      if (streamModePopover) streamModePopover.classList.remove('show');
+      if (btnStreamMode) btnStreamMode.classList.remove('active-pop');
+    });
+  }
+
+  // Initialize stream mode on page load (loads from localStorage)
+  applyStreamMode(currentStreamMode, false);
+
+  // If running on plain HTTP, suggest switching to HTTPS 8443 to unlock Canvas WebCodecs for D-gear
+  if (location.protocol === 'http:' && !window.isSecureContext) {
+    const banner = document.createElement('div');
+    banner.id = 'httpsNoticeBanner';
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:linear-gradient(90deg,#0369a1,#0284c7);color:#fff;padding:6px 14px;font-size:0.75rem;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 10px rgba(0,0,0,0.5);font-family:sans-serif;';
+    banner.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:1rem;">🚗</span>
+        <span><b>车机挂 D 挡防暂停提醒：</b>当前为 HTTP 访问。特斯拉/车机挂 D 挡行车时会强制暂停 video 视频！建议点击 <a href="https://${location.hostname}:8443/" style="color:#fef08a;text-decoration:underline;font-weight:700;">使用 HTTPS (8443) 访问</a>，即可启用 Canvas 原生硬件直出，行车 60 帧绝不卡死！</span>
+      </div>
+      <button onclick="this.parentElement.remove()" style="background:none;border:none;color:#fff;font-size:1.1rem;cursor:pointer;padding:0 4px;">✕</button>
+    `;
+    document.body.appendChild(banner);
+  }
+
+  if (btnHeaderImmersive) {
+    btnHeaderImmersive.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleImmersiveMode(true);
+    });
+  }
+
+  if (btnDockImmersive) {
+    btnDockImmersive.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleImmersiveMode(true);
+    });
+  }
+
+  if (immersiveTrigger) {
+    immersiveTrigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleImmersiveMode(false);
+    });
+  }
+
+  // Keyboard shortcut: H / M / Escape to toggle
+  window.addEventListener('keydown', (e) => {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    if (e.key === 'h' || e.key === 'H' || e.key === 'm' || e.key === 'M') {
+      toggleImmersiveMode();
+    } else if (e.key === 'Escape') {
+      if (terminalModal && terminalModal.classList.contains('open')) {
+        terminalModal.classList.remove('open');
+        if (btnTerminal) btnTerminal.classList.remove('active-pop');
+      } else if (isImmersiveMode) {
+        toggleImmersiveMode(false);
+      }
     }
   });
 </script>
