@@ -1814,6 +1814,7 @@ func sendWsFrame(conn net.Conn, opcode byte, payload []byte) error {
 	}
 
 	bufs := net.Buffers{header[:hLen], payload}
+	_ = conn.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
 	_, err := bufs.WriteTo(conn)
 	return err
 }
@@ -1842,8 +1843,9 @@ func sendMultiplexBinary(conn net.Conn, channel byte, flag byte, data []byte) er
 	header[hLen+3] = 0
 	hLen += 4
 
-	// Critical: Atomic write using net.Buffers. Eliminates TCP Nagle 40ms delay!
+	// Critical: Atomic write using net.Buffers with 250ms deadline. Eliminates stalling & memory backpressure!
 	bufs := net.Buffers{header[:hLen], data}
+	_ = conn.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
 	_, err := bufs.WriteTo(conn)
 	return err
 }
