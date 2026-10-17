@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -22,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -452,6 +454,7 @@ func main() {
 	mux.HandleFunc("/api/terminal/logs", handleTerminalLogs)
 	mux.HandleFunc("/api/terminal/export", handleTerminalExport)
 	mux.HandleFunc("/api/terminal/download", handleTerminalDownload)
+	mux.HandleFunc("/api/system/upgrade", handleSystemUpgrade)
 	mux.HandleFunc("/snapshot", handleSnapshot)
 	mux.HandleFunc("/stream", handleSnapshot)
 
@@ -1569,6 +1572,143 @@ func handleTerminalDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 	w.Write(data)
+}
+
+func handleSystemUpgrade(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Transfer-Encoding", "chunked")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	flusher, _ := w.(http.Flusher)
+
+	emit := func(msg string) {
+		fmt.Fprintf(w, "%s\n", msg)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	emit("==================================================================")
+	emit("       🚀 DiPlay-Pi 车载系统 OTA 在线升级程序启动        ")
+	emit("==================================================================")
+
+	// 1. Receive and save archive to /tmp/diplay-pi-tesla-bundle.tar.gz
+	tmpBundle := "/tmp/diplay-pi-tesla-bundle.tar.gz"
+	var src io.Reader
+	contentType := r.Header.Get("Content-Type")
+
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		emit("[*] 正在解析 Multipart 文件上传数据流...")
+		if err := r.ParseMultipartForm(120 * 1024 * 1024); err != nil {
+			emit(fmt.Sprintf("[-] 上传数据解析失败: %v", err))
+			return
+		}
+		file, header, err := r.FormFile("package")
+		if err != nil {
+			file, header, err = r.FormFile("bundle")
+		}
+		if err != nil {
+			file, header, err = r.FormFile("file")
+		}
+		if err != nil {
+			emit(fmt.Sprintf("[-] 未在表单中找到升级包文件 (package/bundle/file): %v", err))
+			return
+		}
+		defer file.Close()
+		emit(fmt.Sprintf("[*] 文件名称: %s", header.Filename))
+		src = file
+	} else {
+		emit("[*] 正在接收原始二进制数据流...")
+		src = r.Body
+	}
+
+	dstFile, err := os.Create(tmpBundle)
+	if err != nil {
+		emit(fmt.Sprintf("[-] 创建临时升级文件失败: %v", err))
+		return
+	}
+
+	written, err := io.Copy(dstFile, src)
+	dstFile.Close()
+	if err != nil || written < 1024*1024 {
+		emit(fmt.Sprintf("[-] 文件写入不完整 (已写入: %d 字节): %v", written, err))
+		return
+	}
+
+	emit(fmt.Sprintf("[✓] 第一步: 安装包上传成功！(大小: %.2f MB)", float64(written)/(1024*1024)))
+
+	// 2. Extract archive
+	emit("[*] 第二步: 正在解压安装包到升级工作区 /tmp/diplay_upgrade/ ...")
+	upgradeDir := "/tmp/diplay_upgrade"
+	_ = os.RemoveAll(upgradeDir)
+	_ = os.MkdirAll(upgradeDir, 0755)
+
+	tarCmd := exec.Command("tar", "-zxvf", tmpBundle, "-C", upgradeDir)
+	if out, err := tarCmd.CombinedOutput(); err != nil {
+		emit(fmt.Sprintf("[-] 解压安装包失败: %v\n输出: %s", err, string(out)))
+		return
+	}
+	emit("[✓] 安装包解压完成！")
+
+	// Locate install.sh
+	installScript := filepath.Join(upgradeDir, "install.sh")
+	if _, err := os.Stat(installScript); os.IsNotExist(err) {
+		installScript = filepath.Join(upgradeDir, "diplay-pi-tesla", "install.sh")
+	}
+	if _, err := os.Stat(installScript); os.IsNotExist(err) {
+		emit("[-] 错误: 未在解压目录中找到 install.sh 安装引导脚本")
+		return
+	}
+	_ = os.Chmod(installScript, 0755)
+
+	// 3. Execute install.sh with DIPLAY_WEB_UPGRADE=1
+	scriptDir := filepath.Dir(installScript)
+	emit(fmt.Sprintf("[*] 第三步: 正在执行自动化安装程序 (工作目录: %s)...", scriptDir))
+	emit("------------------------------------------------------------------")
+
+	cmd := exec.Command("bash", installScript)
+	cmd.Dir = scriptDir
+	cmd.Env = append(os.Environ(), "DIPLAY_WEB_UPGRADE=1")
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		emit(fmt.Sprintf("[-] 管道创建失败: %v", err))
+		return
+	}
+	cmd.Stderr = cmd.Stdout
+
+	if err := cmd.Start(); err != nil {
+		emit(fmt.Sprintf("[-] 启动安装脚本失败: %v", err))
+		return
+	}
+
+	scanner := bufio.NewScanner(stdoutPipe)
+	for scanner.Scan() {
+		emit(scanner.Text())
+	}
+
+	if err := cmd.Wait(); err != nil {
+		emit("------------------------------------------------------------------")
+		emit(fmt.Sprintf("[-] 安装脚本执行异常 (退出码非0): %v", err))
+		return
+	}
+
+	emit("------------------------------------------------------------------")
+	emit("🎉 升级安装全部完成！")
+	emit("[*] 第四步: 正在调度系统守护进程平滑重启...")
+	emit("[*] 页面将在 3 秒后自动重新连接...")
+
+	// 4. Background delayed restart
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		_ = exec.Command("systemctl", "daemon-reload").Run()
+		_ = exec.Command("systemctl", "restart", "diplay-airplay", "diplay-pi").Run()
+	}()
 }
 
 func handleSnapshot(w http.ResponseWriter, r *http.Request) {

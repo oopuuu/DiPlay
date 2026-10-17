@@ -895,6 +895,9 @@
       <button id="btnSoftReset" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 18px; border-radius: 9999px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: transform 0.15s ease;" title="无需重启树莓派，从 0 深度复位蓝牙芯片与 AirPlay 协议栈">
         <span>⚡ 0状态重启投屏</span>
       </button>
+      <button id="btnEmptyUpgrade" style="background: rgba(245, 158, 11, 0.18); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.45); padding: 8px 18px; border-radius: 9999px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: transform 0.15s ease;" title="网页直接上传完整程序包一键在线安装更新">
+        <span>📦 上传程序包更新</span>
+      </button>
     </div>
   </div>
 </div>
@@ -920,6 +923,7 @@
   <div class="meta-tag clickable" id="tagResolution" title="点击切换投屏分辨率与视口填充模式">-- × --</div>
   <div class="meta-tag" id="tagFpsLatency" title="画面实时渲染帧率">-- FPS</div>
   <div class="header-actions">
+    <button class="icon-btn" id="btnHeaderUpgrade" title="系统升级 (上传安装包更新)">📦</button>
     <button class="icon-btn" id="btnSnapshot" title="保存当前画面高清快照">📸</button>
     <button class="icon-btn" id="btnFullscreen" title="切换浏览器全屏">⛶</button>
     <button class="icon-btn" id="btnToggleImmersive" title="进入沉浸式模式 (隐藏菜单栏与状态条，按 H 键恢复)">👁️</button>
@@ -1201,6 +1205,9 @@
     <button class="dock-btn" id="btnTerminal" title="系统终端 & 诊断控制台 (查看运行日志与执行 Shell 指令)">
       <span>💻</span> <span id="labelTerminalBtn">终端</span>
     </button>
+    <button class="dock-btn" id="btnDockUpgrade" title="上传程序包并一键在线更新">
+      <span>📦</span> <span>更新</span>
+    </button>
     <button class="dock-btn" id="btnDockReconnect" title="触发后台蓝牙自动唤醒并重新连接 iPhone CarPlay">
       <span>🔄</span> <span>重连</span>
     </button>
@@ -1242,6 +1249,7 @@
     <button class="term-chip-btn" data-cmd="sudo bash /opt/diplay/scripts/soft_reset.sh" style="border-color: #38bdf8; color: #38bdf8; font-weight: 700;">⚡ 0状态深度重启投屏 (免重启树莓派)</button>
     <button class="term-chip-btn" data-cmd="iw dev wlan0 info; ip -s link show wlan0">📶 Wi-Fi 频段与吞吐</button>
     <button class="term-chip-btn" data-cmd="uptime; free -m; vcgencmd measure_temp 2>/dev/null || cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null">📊 系统负载与温度</button>
+    <button class="term-chip-btn" id="termChipOta" style="border-color: #f59e0b; color: #fbbf24; font-weight: 700;">📦 在线安装更新 (OTA)</button>
   </div>
 
   <!-- Terminal Output Screen -->
@@ -1258,6 +1266,67 @@
     <span class="term-prompt">pi@diplay:~$</span>
     <input type="text" class="term-input" id="terminalInput" placeholder="输入 Shell 指令 (按回车发送)..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
     <button class="term-submit-btn" id="termBtnSubmit">执行 (Enter)</button>
+  </div>
+</div>
+
+<!-- Built-in OTA Program Package Upgrade Modal -->
+<div class="terminal-modal" id="otaUpgradeModal" style="max-width: 680px;">
+  <div class="terminal-header">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <div class="term-win-dots">
+        <span class="win-dot red"></span>
+        <span class="win-dot yellow"></span>
+        <span class="win-dot green"></span>
+      </div>
+      <span style="font-weight: 700; font-size: 0.9rem; color: #f8fafc; margin-left: 4px;">系统程序包在线升级 (OTA)</span>
+      <span class="term-status-badge" id="otaStatusBadge" style="background: rgba(56, 189, 248, 0.15); border-color: #38bdf8; color: #7dd3fc;">就绪</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <button class="term-close-btn" id="otaBtnClose" title="关闭窗口">✕</button>
+    </div>
+  </div>
+
+  <!-- Upload Drag & Drop Area -->
+  <div id="otaDropZone" style="border: 2px dashed rgba(56, 189, 248, 0.4); border-radius: 12px; padding: 20px 16px; text-align: center; background: rgba(56, 189, 248, 0.04); cursor: pointer; transition: all 0.2s ease;">
+    <input type="file" id="otaFileInput" accept=".tar.gz,.tgz,.tar" style="display: none;" />
+    <div style="font-size: 2.2rem; margin-bottom: 6px;">📦</div>
+    <div style="font-weight: 600; font-size: 0.92rem; color: #f1f5f9; margin-bottom: 4px;">点击选择或拖拽完整安装包 (.tar.gz) 到此处</div>
+    <div style="font-size: 0.78rem; color: #94a3b8;">支持发行安装包 (如 diplay-pi-tesla-bundle.tar.gz) · 自动解压执行 install.sh 热更新</div>
+    <div id="otaSelectedFileInfo" style="display: none; margin-top: 12px; padding: 8px 14px; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 8px; color: #34d399; font-size: 0.82rem; font-weight: 600;">
+      ✓ 已选中: <span id="otaFileName"></span> (<span id="otaFileSize"></span>)
+    </div>
+  </div>
+
+  <!-- Upload & Install Progress Bar -->
+  <div style="margin-top: 14px;">
+    <div style="display: flex; justify-content: space-between; font-size: 0.76rem; color: #94a3b8; margin-bottom: 6px;">
+      <span id="otaProgressStatusText">等待选择安装包...</span>
+      <span id="otaProgressPercent" style="font-weight: 700; color: #38bdf8;">0%</span>
+    </div>
+    <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.08); border-radius: 9999px; overflow: hidden; position: relative;">
+      <div id="otaProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #38bdf8, #3b82f6); border-radius: 9999px; transition: width 0.2s ease;"></div>
+    </div>
+  </div>
+
+  <!-- Terminal Live Log Output Screen -->
+  <div style="margin-top: 14px; display: flex; align-items: center; justify-content: space-between;">
+    <span style="font-size: 0.76rem; font-weight: 600; color: #cbd5e1;">📋 实时安装输出日志</span>
+    <div style="display: flex; gap: 6px;">
+      <button class="term-tool-btn" id="otaBtnClearLog" style="font-size: 0.7rem; padding: 2px 8px;">清屏</button>
+      <button class="term-tool-btn" id="otaBtnCopyLog" style="font-size: 0.7rem; padding: 2px 8px;">复制日志</button>
+    </div>
+  </div>
+  <div class="terminal-screen" id="otaTerminalScreen" style="height: 180px; margin-top: 6px; font-size: 0.74rem; font-family: monospace; white-space: pre-wrap; word-break: break-all; overflow-y: auto;">📦 准备就绪。选择 .tar.gz 安装包后点击「开始安装更新」。
+系统将自动完成上传、解压、依赖部署与热更新平滑重启。
+------------------------------------------------------------------
+</div>
+
+  <!-- Action Bar -->
+  <div style="margin-top: 14px; display: flex; align-items: center; justify-content: flex-end; gap: 10px;">
+    <button id="otaBtnCancel" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #cbd5e1; padding: 7px 16px; border-radius: 8px; font-size: 0.82rem; cursor: pointer;">关闭</button>
+    <button id="otaBtnSubmit" style="background: linear-gradient(135deg, #0284c7, #2563eb); border: none; color: #ffffff; padding: 7px 20px; border-radius: 8px; font-size: 0.82rem; font-weight: 700; cursor: pointer; box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4); display: flex; align-items: center; gap: 6px;" disabled>
+      <span>🚀 开始安装更新</span>
+    </button>
   </div>
 </div>
 
@@ -4436,6 +4505,235 @@
     });
   }
 
+  // ----------------------------------------------------
+  // OTA Package Upgrade & Live Installation Log Console
+  // ----------------------------------------------------
+  const otaUpgradeModal = document.getElementById('otaUpgradeModal');
+  const btnDockUpgrade = document.getElementById('btnDockUpgrade');
+  const btnHeaderUpgrade = document.getElementById('btnHeaderUpgrade');
+  const btnEmptyUpgrade = document.getElementById('btnEmptyUpgrade');
+  const termChipOta = document.getElementById('termChipOta');
+  const otaBtnClose = document.getElementById('otaBtnClose');
+  const otaBtnCancel = document.getElementById('otaBtnCancel');
+  const otaDropZone = document.getElementById('otaDropZone');
+  const otaFileInput = document.getElementById('otaFileInput');
+  const otaSelectedFileInfo = document.getElementById('otaSelectedFileInfo');
+  const otaFileName = document.getElementById('otaFileName');
+  const otaFileSize = document.getElementById('otaFileSize');
+  const otaProgressBar = document.getElementById('otaProgressBar');
+  const otaProgressPercent = document.getElementById('otaProgressPercent');
+  const otaProgressStatusText = document.getElementById('otaProgressStatusText');
+  const otaStatusBadge = document.getElementById('otaStatusBadge');
+  const otaTerminalScreen = document.getElementById('otaTerminalScreen');
+  const otaBtnClearLog = document.getElementById('otaBtnClearLog');
+  const otaBtnCopyLog = document.getElementById('otaBtnCopyLog');
+  const otaBtnSubmit = document.getElementById('otaBtnSubmit');
+
+  let selectedUpgradeFile = null;
+  let isUpgrading = false;
+
+  function openOtaModal() {
+    if (otaUpgradeModal) {
+      otaUpgradeModal.classList.add('open');
+      if (terminalModal) terminalModal.classList.remove('open');
+    }
+  }
+
+  function closeOtaModal() {
+    if (isUpgrading) {
+      if (!confirm('升级程序正在后台执行中，确定关闭窗口？(升级不会中断)')) {
+        return;
+      }
+    }
+    if (otaUpgradeModal) otaUpgradeModal.classList.remove('open');
+  }
+
+  function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
+
+  function handleFileSelected(file) {
+    if (!file) return;
+    if (!file.name.endsWith('.tar.gz') && !file.name.endsWith('.tgz') && !file.name.endsWith('.tar')) {
+      showToast('⚠️ 请上传完整的 .tar.gz 压缩安装包', 3000);
+      return;
+    }
+    selectedUpgradeFile = file;
+    if (otaFileName) otaFileName.textContent = file.name;
+    if (otaFileSize) otaFileSize.textContent = formatBytes(file.size);
+    if (otaSelectedFileInfo) otaSelectedFileInfo.style.display = 'block';
+    if (otaProgressStatusText) otaProgressStatusText.textContent = `已选择安装包 (${formatBytes(file.size)})，点击下方开始安装`;
+    if (otaBtnSubmit) otaBtnSubmit.disabled = false;
+    appendOtaLog(`\n[*] 已载入安装包文件: ${file.name} (${formatBytes(file.size)})`);
+  }
+
+  function appendOtaLog(text) {
+    if (!otaTerminalScreen || !text) return;
+    otaTerminalScreen.textContent += text;
+    otaTerminalScreen.scrollTop = otaTerminalScreen.scrollHeight;
+  }
+
+  if (btnDockUpgrade) btnDockUpgrade.addEventListener('click', openOtaModal);
+  if (btnHeaderUpgrade) btnHeaderUpgrade.addEventListener('click', openOtaModal);
+  if (btnEmptyUpgrade) btnEmptyUpgrade.addEventListener('click', openOtaModal);
+  if (termChipOta) termChipOta.addEventListener('click', openOtaModal);
+  if (otaBtnClose) otaBtnClose.addEventListener('click', closeOtaModal);
+  if (otaBtnCancel) otaBtnCancel.addEventListener('click', closeOtaModal);
+
+  if (otaBtnClearLog) {
+    otaBtnClearLog.addEventListener('click', () => {
+      if (otaTerminalScreen) otaTerminalScreen.textContent = '';
+    });
+  }
+
+  if (otaBtnCopyLog) {
+    otaBtnCopyLog.addEventListener('click', () => {
+      if (!otaTerminalScreen) return;
+      navigator.clipboard.writeText(otaTerminalScreen.textContent).then(() => {
+        showToast('📋 升级日志已复制到剪贴板！');
+      }).catch(() => {
+        showToast('复制失败，请手动选取');
+      });
+    });
+  }
+
+  if (otaDropZone && otaFileInput) {
+    otaDropZone.addEventListener('click', () => {
+      if (!isUpgrading) otaFileInput.click();
+    });
+
+    otaFileInput.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files[0]) {
+        handleFileSelected(e.target.files[0]);
+      }
+    });
+
+    otaDropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (!isUpgrading) {
+        otaDropZone.style.borderColor = '#38bdf8';
+        otaDropZone.style.background = 'rgba(56, 189, 248, 0.12)';
+      }
+    });
+
+    otaDropZone.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      otaDropZone.style.borderColor = 'rgba(56, 189, 248, 0.4)';
+      otaDropZone.style.background = 'rgba(56, 189, 248, 0.04)';
+    });
+
+    otaDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      otaDropZone.style.borderColor = 'rgba(56, 189, 248, 0.4)';
+      otaDropZone.style.background = 'rgba(56, 189, 248, 0.04)';
+      if (!isUpgrading && e.dataTransfer.files && e.dataTransfer.files[0]) {
+        handleFileSelected(e.dataTransfer.files[0]);
+      }
+    });
+  }
+
+  if (otaBtnSubmit) {
+    otaBtnSubmit.addEventListener('click', () => {
+      if (!selectedUpgradeFile || isUpgrading) return;
+      isUpgrading = true;
+      otaBtnSubmit.disabled = true;
+      otaBtnCancel.disabled = true;
+      if (otaStatusBadge) {
+        otaStatusBadge.textContent = '上传中...';
+        otaStatusBadge.style.color = '#38bdf8';
+        otaStatusBadge.style.borderColor = '#38bdf8';
+      }
+      appendOtaLog(`\n==================================================================\n[*] 开始执行系统在线热升级流程...\n[*] 上传程序包: ${selectedUpgradeFile.name} (${formatBytes(selectedUpgradeFile.size)})\n------------------------------------------------------------------\n`);
+
+      const formData = new FormData();
+      formData.append('bundle', selectedUpgradeFile);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/system/upgrade', true);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          if (otaProgressBar) otaProgressBar.style.width = `${pct}%`;
+          if (otaProgressPercent) otaProgressPercent.textContent = `${pct}%`;
+          if (otaProgressStatusText) {
+            otaProgressStatusText.textContent = `正在上传安装包 (${(e.loaded/1024/1024).toFixed(1)}MB / ${(e.total/1024/1024).toFixed(1)}MB) ${pct}%...`;
+          }
+          if (pct >= 100) {
+            if (otaProgressStatusText) otaProgressStatusText.textContent = '📦 安装包上传完毕，服务器正在解压并执行 install.sh...';
+            if (otaStatusBadge) {
+              otaStatusBadge.textContent = '安装部署中';
+              otaStatusBadge.style.color = '#fbbf24';
+              otaStatusBadge.style.borderColor = '#f59e0b';
+            }
+          }
+        }
+      };
+
+      let lastIndex = 0;
+      xhr.onprogress = () => {
+        const chunk = xhr.responseText.substring(lastIndex);
+        lastIndex = xhr.responseText.length;
+        appendOtaLog(chunk);
+      };
+
+      xhr.onload = () => {
+        const remaining = xhr.responseText.substring(lastIndex);
+        if (remaining) appendOtaLog(remaining);
+
+        if (xhr.status === 200) {
+          if (otaProgressBar) otaProgressBar.style.width = '100%';
+          if (otaProgressPercent) otaProgressPercent.textContent = '100%';
+          if (otaStatusBadge) {
+            otaStatusBadge.textContent = '升级成功';
+            otaStatusBadge.style.color = '#34d399';
+            otaStatusBadge.style.borderColor = '#10b981';
+          }
+          showToast('🎉 程序包升级成功！服务重启中，将在 5 秒后自动刷新重连', 4500);
+
+          let countdown = 5;
+          const timer = setInterval(() => {
+            countdown--;
+            if (countdown > 0) {
+              if (otaProgressStatusText) {
+                otaProgressStatusText.textContent = `🎉 升级安装成功！服务正在重启，将在 ${countdown} 秒后自动刷新网页...`;
+              }
+            } else {
+              clearInterval(timer);
+              window.location.reload();
+            }
+          }, 1000);
+        } else {
+          isUpgrading = false;
+          otaBtnSubmit.disabled = false;
+          otaBtnCancel.disabled = false;
+          if (otaStatusBadge) {
+            otaStatusBadge.textContent = '安装异常';
+            otaStatusBadge.style.color = '#f87171';
+            otaStatusBadge.style.borderColor = '#ef4444';
+          }
+          if (otaProgressStatusText) otaProgressStatusText.textContent = `[-] 升级执行失败 (HTTP ${xhr.status})`;
+          appendOtaLog(`\n[-] 升级失败: HTTP ${xhr.status} ${xhr.statusText}\n`);
+        }
+      };
+
+      xhr.onerror = () => {
+        // In case service restarted before response ended
+        if (otaProgressStatusText) otaProgressStatusText.textContent = '系统守护进程正在平滑重启，准备重新加载网页...';
+        showToast('系统守护进程正在重启，将在 4 秒后自动重新连接...', 3500);
+        setTimeout(() => {
+          window.location.reload();
+        }, 4000);
+      };
+
+      xhr.send(formData);
+    });
+  }
+
   // Initialize stream mode on page load (loads from localStorage)
   applyStreamMode(currentStreamMode, false);
 
@@ -4481,7 +4779,9 @@
     if (e.key === 'h' || e.key === 'H' || e.key === 'm' || e.key === 'M') {
       toggleImmersiveMode();
     } else if (e.key === 'Escape') {
-      if (terminalModal && terminalModal.classList.contains('open')) {
+      if (otaUpgradeModal && otaUpgradeModal.classList.contains('open')) {
+        closeOtaModal();
+      } else if (terminalModal && terminalModal.classList.contains('open')) {
         terminalModal.classList.remove('open');
         if (btnTerminal) btnTerminal.classList.remove('active-pop');
       } else if (isImmersiveMode) {

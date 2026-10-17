@@ -94,10 +94,16 @@ echo "[*] 准备目标目录..."
 mkdir -p "$TARGET_DIR" "$TARGET_DIR/bin" "$TARGET_DIR/scripts" "$TARGET_DIR/web" "$TARGET_DIR/auth"
 
 # 停止已有的服务与残留进程，彻底避免文件写入冲突 (Text file busy)
-systemctl stop diplay-pi diplay-gui diplay-bt diplay-airplay diplay-iap2 tesla-gateway 2>/dev/null || true
+if [ "$DIPLAY_WEB_UPGRADE" = "1" ]; then
+    echo "[*] 检测到处于 Web 在线热升级模式 (DIPLAY_WEB_UPGRADE=1)，保持 Web 进程在线以实时回传安装日志..."
+    systemctl stop diplay-gui diplay-bt diplay-airplay diplay-iap2 tesla-gateway 2>/dev/null || true
+    killall -9 diplay-gui 2>/dev/null || true
+else
+    systemctl stop diplay-pi diplay-gui diplay-bt diplay-airplay diplay-iap2 tesla-gateway 2>/dev/null || true
+    killall -9 diplay-gui diplay-pi 2>/dev/null || true
+fi
 systemctl disable tesla-gateway 2>/dev/null || true
 rm -f /etc/systemd/system/tesla-gateway.service 2>/dev/null || true
-killall -9 diplay-gui diplay-pi 2>/dev/null || true
 sleep 0.5
 systemctl daemon-reload
 
@@ -241,7 +247,11 @@ systemctl enable diplay-hotspot 2>/dev/null || true
 systemctl restart diplay-hotspot 2>/dev/null || true
 
 systemctl enable diplay-pi
-systemctl restart diplay-pi
+if [ "$DIPLAY_WEB_UPGRADE" = "1" ]; then
+    echo "[*] Web OTA 在线升级模式：跳过同步重启 diplay-pi (将在升级日志输出完毕后由后台平滑重启)..."
+else
+    systemctl restart diplay-pi
+fi
 
 # 检查 Java 环境并启动 AirPlay RTSP 核心音视频接收引擎
 if ! command -v java &>/dev/null; then
@@ -312,6 +322,7 @@ chmod +x "$STAGE_DIR/uninstall.sh"
 TAR_FILE="$DIST_DIR/diplay-pi-tesla-bundle.tar.gz"
 echo "[*] 正在压缩归档: $TAR_FILE..."
 (cd "$DIST_DIR" && COPYFILE_DISABLE=1 tar --no-xattrs -czf "$TAR_FILE" diplay-pi-tesla)
+rm -rf "$STAGE_DIR"
 
 echo ""
 echo "=================================================================="
