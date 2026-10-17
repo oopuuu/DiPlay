@@ -1415,6 +1415,8 @@
             } else if (channel === 0x01) {
               // Channel 0x01: H.264/H.265 Video Configuration (avcC / SPS+PPS)
               const avcCBuffer = buf.slice(4);
+              cachedDescription = avcCBuffer;
+              cachedAnnexBConfig = avccToAnnexB(new Uint8Array(avcCBuffer));
               if (hasWebCodecs) {
                 const u8Avc = new Uint8Array(avcCBuffer);
                 let codecStr = 'avc1.640028';
@@ -1426,9 +1428,16 @@
                 }
                 initWebCodecsDecoder(codecStr, avcCBuffer);
               } else {
-                cachedAnnexBConfig = avccToAnnexB(new Uint8Array(avcCBuffer));
-                sendRemoteLog('[MSE] Converted avcC (' + avcCBuffer.byteLength + 'B) to AnnexB (' + (cachedAnnexBConfig ? cachedAnnexBConfig.length : 0) + 'B)');
-                if (!jmuxerPlayer) initJMuxer();
+                if (wasmDecoderOpen && cachedAnnexBConfig) {
+                  try {
+                    const cfg = new Uint8Array(cachedAnnexBConfig);
+                    const p = Module._malloc(cfg.length);
+                    Module.HEAPU8.set(cfg, p);
+                    Module._decodeData(p, cfg.length, wasmPts++);
+                    Module._free(p);
+                  } catch (_) {}
+                }
+                if (!jmuxerPlayer && typeof JMuxer !== 'undefined') initJMuxer();
                 if (jmuxerPlayer && cachedAnnexBConfig) {
                   jmuxerPlayer.feed({ video: cachedAnnexBConfig });
                   mseKeyframeFed = true;
@@ -1714,7 +1723,8 @@
   // ----------------------------------------------------
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
   const isSecure = window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-  const hasWebCodecs = isSecure && typeof window.VideoDecoder !== 'undefined';
+  // Reference DashPlay: WebKit/Safari supports VideoDecoder on local IP/LAN. Use direct capability detection:
+  const hasWebCodecs = typeof window.VideoDecoder !== 'undefined' && typeof window.VideoDecoder.isConfigSupported === 'function';
   
   // MediaSource (MSE) fallback player for non-secure HTTP contexts
   let jmuxerPlayer = null;
@@ -1955,13 +1965,22 @@
             videoFpsInterval = now;
             updateFpsDisplay(currentVideoFps, 'WebGL软解');
           }
-        });
+        }, 'viiiiiiiii');
       }
 
       const ret = Module._openDecoder(0 /* H.264 */, wasmCallbackPtr, 0 /* log level */);
       if (ret === 0) {
         wasmDecoderOpen = true;
         sendRemoteLog('[WASM-WebGL] 初始化 FFmpeg H.264 WebGL 解码器成功！');
+        if (cachedAnnexBConfig) {
+          try {
+            const cfg = new Uint8Array(cachedAnnexBConfig);
+            const p = Module._malloc(cfg.length);
+            Module.HEAPU8.set(cfg, p);
+            Module._decodeData(p, cfg.length, wasmPts++);
+            Module._free(p);
+          } catch (_) {}
+        }
         return true;
       } else {
         console.error('[WASM-WebGL] openDecoder failed:', ret);
@@ -2133,43 +2152,62 @@
     }
   }
 
-  /**
-   * Transforms Annex-B (0x00 00 00 01) into AVCC (4-byte length prefix) IN-PLACE.
-   * Apple VideoToolbox / Safari WebKit strictly requires AVCC length-prefixed NAL units
-   * when configured with an AVCDecoderConfigurationRecord (avcC).
-   */
-  function toAvccInPlace(buffer) {
-    const u8 = new Uint8Array(buffer);
-    if (u8.length < 4) return buffer;
-
-    if (u8[0] === 0 && u8[1] === 0 && u8[2] === 0 && u8[3] === 1) {
-      const offsets = [];
-      let i = 0;
-      const len = u8.length;
-      while (i <= len - 4) {
-        if (u8[i] === 0 && u8[i+1] === 0 && u8[i+2] === 0 && u8[i+3] === 1) {
-          offsets.push(i);
-          i += 4;
-        } else {
-          i++;
-        }
-      }
-      for (let s = 0; s < offsets.length; s++) {
-        const start = offsets[s];
-        const next = (s + 1 < offsets.length) ? offsets[s + 1] : len;
-        const nalLen = next - (start + 4);
-        u8[start] = (nalLen >>> 24) & 0xff;
-        u8[start + 1] = (nalLen >>> 16) & 0xff;
-        u8[start + 2] = (nalLen >>> 8) & 0xff;
-        u8[start + 3] = nalLen & 0xff;
-      }
+  function sameConfig(a, b) {
+    if (!a || !b) return false;
+    const uA = (a instanceof Uint8Array) ? a : new Uint8Array(a);
+    const uB = (b instanceof Uint8Array) ? b : new Uint8Array(b);
+    if (uA.length !== uB.length) return false;
+    for (let i = 0; i < uA.length; i++) {
+      if (uA[i] !== uB[i]) return false;
     }
-    return buffer;
+    return true;
+  }
+
+  /**
+   * Reference DashPlay Se() / annexBToAvcc():
+   * Transforms Annex-B (0x000001 / 0x00000001) into AVCC 4-byte length prefixes WITHOUT mutating source buffer.
+   * Required for WebCodecs EncodedVideoChunk when description (avcC) is provided.
+   */
+  function annexBToAvcc(e) {
+    let t = [], n = 0;
+    while (n + 3 < e.length) {
+      let r = 0;
+      if (e[n] === 0 && e[n+1] === 0 && e[n+2] === 1) r = 3;
+      else if (n + 4 <= e.length && e[n] === 0 && e[n+1] === 0 && e[n+2] === 0 && e[n+3] === 1) r = 4;
+      if (r === 0) { n += 1; continue; }
+      let i = n + r, a = -1, o = i;
+      while (o + 2 < e.length) {
+        if (e[o] === 0 && e[o+1] === 0) {
+          if (e[o+2] === 1) { a = o; break; }
+          if (o + 3 < e.length && e[o+2] === 0 && e[o+3] === 1) { a = o; break; }
+        }
+        o += 1;
+      }
+      let s = a === -1 ? e.length : a;
+      if (s > i) t.push({ offset: i, length: s - i });
+      n = s;
+    }
+    if (t.length === 0) return e;
+    let r = 0;
+    for (let item of t) r += 4 + item.length;
+    let i = new Uint8Array(r), a = new DataView(i.buffer), o = 0;
+    for (let item of t) {
+      a.setUint32(o, item.length);
+      i.set(e.subarray(item.offset, item.offset + item.length), o + 4);
+      o += 4 + item.length;
+    }
+    return i;
   }
 
   function initWebCodecsDecoder(codecStr, descriptionData) {
     if (!hasWebCodecs || !videoCanvas) return;
     try {
+      // DashPlay steady picture optimization: iPhone resends codec config with every keyframe.
+      // If the running decoder has the exact same config, keep it running! Do not tear it down or clear the canvas.
+      if (videoDecoder && videoDecoder.state === 'configured' && cachedDescription && sameConfig(cachedDescription, descriptionData)) {
+        return;
+      }
+
       if (descriptionData && descriptionData.byteLength > 0) {
         cachedDescription = descriptionData;
       }
@@ -2297,8 +2335,8 @@
           }
           lastVideoTimestamp = currentTs;
 
-          // Transform Annex-B start codes to AVCC 4-byte lengths for Apple VideoToolbox / Safari
-          const avccBuffer = toAvccInPlace(naluBuffer);
+          // Transform Annex-B start codes to AVCC 4-byte lengths for Apple VideoToolbox / Safari WebCodecs
+          const avccBuffer = annexBToAvcc(new Uint8Array(naluBuffer));
 
           const chunk = new EncodedVideoChunk({
             type: isKey ? 'key' : 'delta',
