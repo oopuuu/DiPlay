@@ -1508,7 +1508,7 @@
                 }
                 if (!jmuxerPlayer && typeof JMuxer !== 'undefined') initJMuxer();
                 if (jmuxerPlayer && cachedAnnexBConfig) {
-                  jmuxerPlayer.feed({ video: cachedAnnexBConfig });
+                  jmuxerPlayer.feed({ video: cachedAnnexBConfig, isLastVideoFrameComplete: true });
                   mseKeyframeFed = true;
                 }
               }
@@ -1803,8 +1803,8 @@
       jmuxerPlayer = new JMuxer({
         node: 'carplayVideoTag',
         mode: 'video',
-        flushingTime: 33,   // 33ms 智能微批处理 (匹配 ~30-60fps)，防止 SourceBuffer 异步更新冲突
-        maxDelay: 50,       // 允许最大排队 50ms，超限自动丢弃过时帧
+        flushingTime: 0,
+        maxDelay: 500,
         clearBuffer: true,
         fps: 60,
         debug: false,
@@ -1814,7 +1814,30 @@
       });
       const videoTag = document.getElementById('carplayVideoTag');
       if (videoTag) {
+        videoTag.muted = true;
+        videoTag.defaultMuted = true;
+        videoTag.playsInline = true;
+        videoTag.setAttribute('muted', '');
+        videoTag.setAttribute('playsinline', '');
+        videoTag.setAttribute('webkit-playsinline', '');
         videoTag.play().catch(function() {});
+
+        videoTag.onplaying = () => {
+          if (!hasReceivedVideoFrame) {
+            hasReceivedVideoFrame = true;
+            emptyOverlay.classList.add('hidden');
+            updateStatusBadge();
+            sendRemoteLog('[MSE] Video 硬件解码播放就绪并成功点亮！');
+          }
+        };
+        videoTag.ontimeupdate = () => {
+          if (!hasReceivedVideoFrame && videoTag.currentTime > 0) {
+            hasReceivedVideoFrame = true;
+            emptyOverlay.classList.add('hidden');
+            updateStatusBadge();
+          }
+        };
+
         // 实时低延迟平滑追帧：使用动态微调倍速 (playbackRate)，杜绝硬 seek 导致解码管线黑屏冻结！
         setInterval(() => {
           if (videoTag.paused && hasReceivedVideoFrame) {
@@ -1823,19 +1846,16 @@
           if (videoTag.buffered && videoTag.buffered.length > 0) {
             const end = videoTag.buffered.end(videoTag.buffered.length - 1);
             const lag = end - videoTag.currentTime;
-            if (lag > 1.2) {
-              // 极端严重滞后（如后台挂起恢复或重连），才执行单次快速追帧跳跃
+            if (lag > 0.8) {
               videoTag.currentTime = end - 0.05;
               videoTag.playbackRate = 1.0;
-            } else if (lag > 0.18) {
-              // 轻度滞后，平滑微幅加速 8% 追齐，无任何画面卡顿或黑屏
-              videoTag.playbackRate = 1.08;
-            } else if (lag < 0.08) {
-              // 已追至零延迟区间，恢复正常原速
+            } else if (lag > 0.15) {
+              videoTag.playbackRate = 1.06;
+            } else if (lag < 0.05) {
               videoTag.playbackRate = 1.0;
             }
           }
-        }, 200);
+        }, 150);
       }
       sendRemoteLog('[MSE] JMuxer 极速微批流与追帧渲染管线就绪！');
     } catch (e) {
@@ -1892,45 +1912,70 @@
   }
 
   let mseKeyframeFed = false;
+  let canvasMirrorRunning = false;
+  function startCanvasMirrorLoop() {
+    if (canvasMirrorRunning) return;
+    canvasMirrorRunning = true;
+    const vTag = document.getElementById('carplayVideoTag');
+    const vCvs = document.getElementById('carplayVideoCanvas');
+    const ctx = vCvs ? vCvs.getContext('2d') : null;
+    function step() {
+      if (currentStreamMode === 'hardware' || currentStreamMode === 'canvas_mirror') {
+        if (!hasWebCodecs && vTag && vCvs && ctx) {
+          if (vTag.readyState >= 2 && !vTag.paused && vTag.videoWidth > 0) {
+            if (vCvs.width !== vTag.videoWidth || vCvs.height !== vTag.videoHeight) {
+              vCvs.width = vTag.videoWidth;
+              vCvs.height = vTag.videoHeight;
+              currentWidth = vTag.videoWidth;
+              currentHeight = vTag.videoHeight;
+              if (typeof updateResolutionDisplay === 'function') updateResolutionDisplay();
+            }
+            ctx.drawImage(vTag, 0, 0, vCvs.width, vCvs.height);
+            if (!hasReceivedVideoFrame) {
+              hasReceivedVideoFrame = true;
+              emptyOverlay.classList.add('hidden');
+              updateStatusBadge();
+              sendRemoteLog('[CanvasMirror] 画面已成功镜像渲染至 Canvas (行车防黑屏)');
+            }
+          }
+        }
+      }
+      requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
   function handleVideoChunkMSE(naluBuffer, isKey) {
     lastVideoPacketTime = performance.now();
     if (!jmuxerPlayer) {
       initJMuxer();
     }
+    const videoTag = document.getElementById('carplayVideoTag');
     // Critical: Do NOT feed delta frames into MSE until the fresh keyframe has arrived!
     if (!mseKeyframeFed) {
       if (!isKey) {
         return; // Drop delta frames that arrived before the keyframe
       }
       if (cachedAnnexBConfig) {
-        jmuxerPlayer.feed({ video: cachedAnnexBConfig });
+        jmuxerPlayer.feed({ video: cachedAnnexBConfig, isLastVideoFrameComplete: true });
       }
       mseKeyframeFed = true;
       sendRemoteLog('[MSE] 关键帧 (IDR) 已到达，开始喂入 MSE SourceBuffer！');
     }
-    const videoTag = document.getElementById('carplayVideoTag');
-    if (!hasReceivedVideoFrame) {
-      hasReceivedVideoFrame = true;
-      if (screen) screen.style.display = 'none';
-      if (videoCanvas) {
-        videoCanvas.style.display = 'none';
-        videoCanvas.style.zIndex = '1';
-      }
-      if (videoTag) {
-        videoTag.style.display = 'block';
-        videoTag.style.opacity = '1';
-        videoTag.style.zIndex = '5';
-        videoTag.style.pointerEvents = 'auto';
-        videoTag.play().catch(function() {});
-      }
-      emptyOverlay.classList.add('hidden');
-      updateStatusBadge();
-      sendRemoteLog('[MSE] 满帧 60 FPS 硬件直通视频流已点亮 (MSE模式)！');
-    }
 
     if (jmuxerPlayer) {
+      let chunk = new Uint8Array(naluBuffer);
+      if (isKey && cachedAnnexBConfig) {
+        if (chunk.length >= 5 && (chunk[4] & 0x1f) !== 7) {
+          const merged = new Uint8Array(cachedAnnexBConfig.length + chunk.length);
+          merged.set(cachedAnnexBConfig, 0);
+          merged.set(chunk, cachedAnnexBConfig.length);
+          chunk = merged;
+        }
+      }
       jmuxerPlayer.feed({
-        video: new Uint8Array(naluBuffer)
+        video: chunk,
+        isLastVideoFrameComplete: true
       });
       if (videoTag && videoTag.paused) {
         videoTag.play().catch(function() {});
@@ -1943,7 +1988,7 @@
       currentVideoFps = Math.round((videoFrameCounter * 1000) / (now - videoFpsInterval));
       videoFrameCounter = 0;
       videoFpsInterval = now;
-      updateFpsDisplay(currentVideoFps, '硬件直出');
+      updateFpsDisplay(currentVideoFps, (currentStreamMode === 'video_mse' ? 'Video直出' : 'Canvas硬件镜像'));
     }
   }
 
@@ -2138,28 +2183,31 @@
       if (labelStreamMode) labelStreamMode.textContent = 'Canvas直出';
       if (iconStreamMode) iconStreamMode.textContent = '⚡';
 
-      if (videoTag) {
-        try { videoTag.pause(); } catch (_) {}
-        videoTag.style.display = 'none';
-        videoTag.style.pointerEvents = 'none';
+      if (videoCanvas) {
+        videoCanvas.style.display = 'block';
+        videoCanvas.style.opacity = '1';
+        videoCanvas.style.zIndex = '5';
+        videoCanvas.style.pointerEvents = 'auto';
       }
 
       if (hasWebCodecs) {
-        if (videoCanvas) {
-          videoCanvas.style.display = 'block';
-          videoCanvas.style.zIndex = '5';
-          videoCanvas.style.pointerEvents = 'auto';
+        if (videoTag) {
+          try { videoTag.pause(); } catch (_) {}
+          videoTag.style.display = 'none';
         }
-        if (broadwayCvs) broadwayCvs.style.display = 'none';
-        if (showNotice) showToast('⚡ 已切换为「Canvas 极速硬件流 (行车防暂停)」');
+        if (showNotice) showToast('⚡ 已切换为「Canvas 硬件流 (WebCodecs)」');
       } else {
-        if (videoCanvas) videoCanvas.style.display = 'none';
-        if (broadwayCvs) {
-          broadwayCvs.style.display = 'block';
-          broadwayCvs.style.zIndex = '5';
-          broadwayCvs.style.pointerEvents = 'auto';
+        // Plain HTTP / Tesla Car without internet:
+        // Run MSE video in background and mirror directly to Canvas (D-gear anti-pause!)
+        if (videoTag) {
+          videoTag.style.display = 'block';
+          videoTag.style.opacity = '0.001';
+          videoTag.style.zIndex = '1';
+          videoTag.style.pointerEvents = 'none';
+          videoTag.play().catch(function() {});
         }
-        if (showNotice) showToast('⚡ 已启用「Canvas WebGL 离线软解 (行车防暂停/无需HTTPS)」');
+        startCanvasMirrorLoop();
+        if (showNotice) showToast('⚡ 已启用「Canvas 硬件镜像流 (行车防暂停/纯HTTP)」');
       }
 
       if (hasReceivedVideoFrame) {
@@ -2167,7 +2215,7 @@
         updateStatusBadge();
       }
     } else {
-      // 方案 B：Video 标签兼容流 (MSE)
+      // 方案 B：Video 标签直出流 (MSE)
       if (checkPlanA) checkPlanA.style.display = 'none';
       if (checkPlanB) checkPlanB.style.display = 'inline';
       if (btnSelectPlanA) btnSelectPlanA.classList.remove('current');
@@ -2193,7 +2241,7 @@
         updateStatusBadge();
       }
 
-      if (showNotice) showToast('🎬 已切换为「方案 B：Video 标签兼容流」');
+      if (showNotice) showToast('🎬 已切换为「方案 B：Video 标签硬件流」');
     }
 
     if (typeof updateResolutionDisplay === 'function') updateResolutionDisplay();
@@ -2417,12 +2465,10 @@
           sendRemoteLog('[WebCodecs] Chunk decode exception: ' + (e ? (e.message || e) : ''));
         }
         return;
-      } else {
-        // Plain HTTP or environment without WebCodecs (Tesla Browser on HTTP) -> FFmpeg WASM + WebGL on Canvas!
-        handleVideoChunkWasm(naluBuffer, isKey);
-        return;
       }
     }
+    // Plain HTTP / Tesla Car without HTTPS: Feed through MSE hardware decoding!
+    // (Plan A mirrors MSE video to Canvas at 60 FPS; Plan B displays Video directly)
     handleVideoChunkMSE(naluBuffer, isKey);
   }
 

@@ -133,6 +133,7 @@ type Hub struct {
 
 	// Video Caching
 	lastCodecData []byte
+	annexBConfig  []byte
 	lastFrame     []byte
 	lastJpegFrame []byte
 
@@ -260,6 +261,7 @@ func (h *Hub) ResetStreamingState() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.lastCodecData = nil
+	h.annexBConfig = nil
 	for len(h.frameChan) > 0 {
 		select {
 		case <-h.frameChan:
@@ -1763,9 +1765,15 @@ func handleWs(w http.ResponseWriter, r *http.Request) {
 		wWidth, wHeight, hw.Cpu, hw.Temp, hw.MemUsedMB, hw.MemTotalMB)
 	sendWsFrame(conn, 0x01, []byte(initMsg))
 
-	// 2. Instant Render: Push cached SPS/PPS codec configuration (avcC)
+	// 2. Instant Render: Push cached SPS/PPS codec configuration (avcC) and last keyframe
 	if len(codecData) > 0 {
 		sendMultiplexBinary(conn, 0x01, 0, codecData)
+	}
+	hub.mu.RLock()
+	lastInitFrame := hub.lastFrame
+	hub.mu.RUnlock()
+	if len(lastInitFrame) > 0 {
+		sendMultiplexBinary(conn, 0x02, 1, lastInitFrame)
 	}
 
 	// 3. Client connected. Cached SPS/PPS pushed. Never send disruptive keyframe commands to ctrlBridge.
@@ -1830,12 +1838,16 @@ func handleWs(w http.ResponseWriter, r *http.Request) {
 						ctrlBridge.Send(string(payload))
 					}
 				case "requestKeyFrame":
-					// Safely replay cached SPS/PPS configuration immediately if available
+					// Safely replay cached SPS/PPS configuration & latest keyframe immediately
 					hub.mu.RLock()
 					codec := hub.lastCodecData
+					lastF := hub.lastFrame
 					hub.mu.RUnlock()
 					if len(codec) > 0 {
 						sendMultiplexBinary(conn, 0x01, 0, codec)
+					}
+					if len(lastF) > 0 {
+						sendMultiplexBinary(conn, 0x02, 1, lastF)
 					}
 				}
 			}
@@ -1889,12 +1901,29 @@ func (h *Hub) runBroadcaster() {
 		select {
 		case frame := <-h.frameChan:
 			isKey := isH264Keyframe(frame)
-			h.mu.Lock()
-			h.lastFrame = frame
+			h.mu.RLock()
+			annexB := h.annexBConfig
 			clients := make([]net.Conn, 0, len(h.wsClients))
 			for c := range h.wsClients {
 				clients = append(clients, c)
 			}
+			h.mu.RUnlock()
+
+			if isKey && len(annexB) > 0 {
+				hasSps := false
+				if len(frame) >= 5 && frame[0] == 0 && frame[1] == 0 && frame[2] == 0 && frame[3] == 1 && ((frame[4]&0x1F) == 7 || (frame[4]&0x1F) == 8) {
+					hasSps = true
+				}
+				if !hasSps {
+					completeKeyframe := make([]byte, len(annexB)+len(frame))
+					copy(completeKeyframe, annexB)
+					copy(completeKeyframe[len(annexB):], frame)
+					frame = completeKeyframe
+				}
+			}
+
+			h.mu.Lock()
+			h.lastFrame = frame
 			h.mu.Unlock()
 
 			flag := byte(0)
@@ -2143,10 +2172,14 @@ func handleVideoIngest(conn net.Conn) {
 
 		// Check if this is an avcC/SPS/PPS configuration frame (starts with 0x01 0x64 or SPS 0x67)
 		if isConfig {
+			annexB := avccToAnnexB(frame)
 			hub.mu.Lock()
 			hub.lastCodecData = frame
+			if len(annexB) > 0 {
+				hub.annexBConfig = annexB
+			}
 			hub.mu.Unlock()
-			log.Printf("[VideoFeed] Saved new SPS/PPS config (%d bytes). Forwarding to %d clients...", len(frame), len(hub.wsClients))
+			log.Printf("[VideoFeed] Saved new SPS/PPS config (%d bytes avcC, %d bytes Annex-B). Forwarding to %d clients...", len(frame), len(annexB), len(hub.wsClients))
 			// Push immediately to all active WS clients
 			hub.mu.RLock()
 			for c := range hub.wsClients {
@@ -2254,6 +2287,42 @@ func isH264Keyframe(data []byte) bool {
 		return true
 	}
 	return false
+}
+
+func avccToAnnexB(avcc []byte) []byte {
+	if len(avcc) < 11 || avcc[0] != 1 {
+		// If already Annex-B with SPS
+		if len(avcc) >= 4 && avcc[0] == 0 && avcc[1] == 0 && (avcc[2] == 1 || (avcc[2] == 0 && avcc[3] == 1)) {
+			return avcc
+		}
+		return nil
+	}
+	numSps := int(avcc[5] & 0x1F)
+	offset := 6
+	var out []byte
+	for i := 0; i < numSps && offset+2 <= len(avcc); i++ {
+		spsLen := int(avcc[offset])<<8 | int(avcc[offset+1])
+		offset += 2
+		if offset+spsLen <= len(avcc) {
+			out = append(out, 0, 0, 0, 1)
+			out = append(out, avcc[offset:offset+spsLen]...)
+			offset += spsLen
+		}
+	}
+	if offset < len(avcc) {
+		numPps := int(avcc[offset])
+		offset++
+		for i := 0; i < numPps && offset+2 <= len(avcc); i++ {
+			ppsLen := int(avcc[offset])<<8 | int(avcc[offset+1])
+			offset += 2
+			if offset+ppsLen <= len(avcc) {
+				out = append(out, 0, 0, 0, 1)
+				out = append(out, avcc[offset:offset+ppsLen]...)
+				offset += ppsLen
+			}
+		}
+	}
+	return out
 }
 
 func isConfigPacket(data []byte) bool {
