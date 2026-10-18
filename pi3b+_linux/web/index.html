@@ -1599,6 +1599,194 @@
 <!-- Global Floating Toast Notification -->
 <div id="globalToast" class="global-toast" style="display: none;"></div>
 
+
+<!-- Video Decoder & Playback Diagnostics HUD Modal -->
+<div id="videoLogModal" class="system-modal" style="display: none;">
+  <div class="system-modal-backdrop" id="videoLogBackdrop"></div>
+  <div class="system-modal-card" style="max-width: 920px; width: 94%; max-height: 88vh; display: flex; flex-direction: column; background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(56, 189, 248, 0.35); box-shadow: 0 20px 50px rgba(0,0,0,0.8), 0 0 30px rgba(56, 189, 248, 0.2); backdrop-filter: blur(20px); border-radius: 16px; overflow: hidden;">
+    
+    <!-- Modal Header -->
+    <div style="padding: 14px 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); display: flex; align-items: center; justify-content: space-between; background: rgba(15, 23, 42, 0.8);">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 1.35rem;">📺</span>
+        <div>
+          <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+            车机视频播放与解码实时诊断 HUD
+            <span id="hudBadgeMode" style="font-size: 0.72rem; padding: 2px 8px; border-radius: 9999px; background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4);">检测中</span>
+          </h3>
+          <p style="margin: 2px 0 0; font-size: 0.76rem; color: #94a3b8;">
+            全面监控底层 WebSocket 数据流、MediaSource 缓冲队列、&lt;video&gt; 状态与 Canvas 渲染管道
+          </p>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <button id="btnHudTriggerPlay" class="hud-action-btn" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4);" title="主动点击触发播放，突破车载浏览器自动播放拦截策略">
+          <span>▶️ 手动触发播放</span>
+        </button>
+        <button id="btnHudRestartPipeline" class="hud-action-btn" style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4);" title="销毁并重新初始化解码管线并索要全新实时关键帧">
+          <span>🔄 重启解码</span>
+        </button>
+        <button id="btnCloseVideoLog" style="background: rgba(255,255,255,0.08); border: none; color: #94a3b8; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 1.1rem; display: flex; align-items: center; justify-content: center;">✕</button>
+      </div>
+    </div>
+
+    <!-- Telemetry Cards Grid -->
+    <div style="padding: 12px 18px; background: rgba(0, 0, 0, 0.4); border-bottom: 1px solid rgba(255, 255, 255, 0.06); display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px;">
+      
+      <!-- Card 1: 协议与浏览器兼容 -->
+      <div class="hud-metric-card">
+        <div class="hud-metric-title">🌐 运行环境与能力</div>
+        <div id="hudEnvProtocol" class="hud-metric-val">HTTP (非安全环境)</div>
+        <div id="hudEnvMse" class="hud-metric-sub">MSE: 检测中...</div>
+      </div>
+
+      <!-- Card 2: 视频流接收 -->
+      <div class="hud-metric-card">
+        <div class="hud-metric-title">📡 数据流接收 (Rx)</div>
+        <div id="hudStreamFrames" class="hud-metric-val">帧数: 0 (IDR: 0)</div>
+        <div id="hudStreamBitrate" class="hud-metric-sub">码率: 0.0 Mbps · 0 FPS</div>
+      </div>
+
+      <!-- Card 3: <video> 标签播放器状态 -->
+      <div class="hud-metric-card">
+        <div class="hud-metric-title">🎬 &lt;video&gt; 播放器状态</div>
+        <div id="hudVideoState" class="hud-metric-val">readyState: 0</div>
+        <div id="hudVideoDetail" class="hud-metric-sub">尺寸: 0×0 · 暂停: 是</div>
+      </div>
+
+      <!-- Card 4: 缓冲与延迟 -->
+      <div class="hud-metric-card">
+        <div class="hud-metric-title">⏱️ MSE 缓冲与延迟</div>
+        <div id="hudBufferRange" class="hud-metric-val">缓冲: 无</div>
+        <div id="hudBufferLag" class="hud-metric-sub">延迟: 0.00s · updating: 否</div>
+      </div>
+
+      <!-- Card 5: 渲染管道 -->
+      <div class="hud-metric-card">
+        <div class="hud-metric-title">🎨 画面渲染目标</div>
+        <div id="hudCanvasState" class="hud-metric-val">Canvas 镜像</div>
+        <div id="hudCanvasDetail" class="hud-metric-sub">绘制: 0 帧</div>
+      </div>
+
+    </div>
+
+    <!-- Log Console Toolbar -->
+    <div style="padding: 8px 18px; display: flex; align-items: center; justify-content: space-between; background: rgba(15, 23, 42, 0.7); border-bottom: 1px solid rgba(255, 255, 255, 0.05); font-size: 0.8rem;">
+      <div style="display: flex; align-items: center; gap: 8px; color: #94a3b8;">
+        <span>📜 实时解码日志流 (快捷键 D 可随时开启/关闭)</span>
+        <span id="hudLogCount" style="padding: 1px 6px; background: rgba(255,255,255,0.1); border-radius: 4px; font-size: 0.72rem;">0 条</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; color: #cbd5e1; font-size: 0.75rem;">
+          <input type="checkbox" id="checkHudAutoScroll" checked style="accent-color: var(--accent);"> 自动滚屏
+        </label>
+        <button id="btnHudCopyLog" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #e2e8f0; padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; cursor: pointer;">
+          📋 复制全部
+        </button>
+        <button id="btnHudClearLog" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); color: #f87171; padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; cursor: pointer;">
+          🧹 清空
+        </button>
+      </div>
+    </div>
+
+    <!-- Scrollable Log Screen -->
+    <div id="hudLogContainer" style="flex: 1; min-height: 240px; max-height: 380px; overflow-y: auto; padding: 12px 16px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.75rem; line-height: 1.5; color: #e2e8f0; background: #050811;">
+      <!-- Dynamic Log Lines will be appended here -->
+    </div>
+
+  </div>
+</div>
+
+
+<!-- TeslaCam Dashcam & Sentry Management Modal -->
+<div id="teslaCamModal" class="system-modal" style="display: none;">
+  <div class="system-modal-backdrop" id="teslaCamBackdrop"></div>
+  <div class="system-modal-card" style="max-width: 980px; width: 94%; max-height: 90vh; display: flex; flex-direction: column; background: rgba(15, 23, 42, 0.96); border: 1px solid rgba(239, 68, 68, 0.35); box-shadow: 0 25px 60px rgba(0,0,0,0.85), 0 0 30px rgba(239, 68, 68, 0.15); backdrop-filter: blur(24px); border-radius: 16px; overflow: hidden;">
+    
+    <!-- Modal Header -->
+    <div style="padding: 14px 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); display: flex; align-items: center; justify-content: space-between; background: rgba(15, 23, 42, 0.85);">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 1.4rem; color: #ef4444;">🛡️</span>
+        <div>
+          <h3 style="margin: 0; font-size: 1.1rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+            特斯拉行车记录仪与哨兵影像管理
+            <span id="teslaCamStatusBadge" class="teslacam-badge teslacam-badge-red">检测中...</span>
+          </h3>
+          <p style="margin: 2px 0 0; font-size: 0.76rem; color: #94a3b8;">
+            连接手套箱常供电 USB 端口 · 支持四视角在线回放预览、单文件极速提取与整事件打包 ZIP 下载
+          </p>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <button id="btnRefreshTeslaCam" class="teslacam-btn teslacam-btn-sec" title="通知内核同步磁盘并拉取特斯拉刚刚写入的最新影像">
+          <span>🔄 同步最新影像</span>
+        </button>
+        <button id="btnCloseTeslaCam" style="background: rgba(255,255,255,0.08); border: none; color: #94a3b8; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 1.1rem; display: flex; align-items: center; justify-content: center;">✕</button>
+      </div>
+    </div>
+
+    <!-- Storage Telemetry Banner -->
+        <!-- Hardware OTG & Model Diagnostic Banner -->
+    <div id="teslaCamHardwareAlert" style="display: none; margin: 8px 18px; padding: 10px 14px; border-radius: 8px; font-size: 0.78rem; line-height: 1.5;"></div>
+
+    <div style="padding: 10px 20px; background: rgba(0, 0, 0, 0.4); border-bottom: 1px solid rgba(255, 255, 255, 0.06); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; font-size: 0.8rem;">
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <span style="color: #cbd5e1;">💾 存储盘: <strong id="teslaCamDiskModel" style="color: #f1f5f9;">TeslaCam USB Storage</strong></span>
+        <span style="color: #64748b;">|</span>
+        <span style="color: #cbd5e1;">空间占用: <strong id="teslaCamSpaceText" style="color: #38bdf8;">-- / -- (--%)</strong></span>
+      </div>
+      <div style="flex: 1; max-width: 220px; height: 6px; background: rgba(255,255,255,0.1); border-radius: 9999px; overflow: hidden;">
+        <div id="teslaCamSpaceBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #38bdf8, #ef4444); transition: width 0.3s ease;"></div>
+      </div>
+    </div>
+
+    <!-- Category Tabs -->
+    <div style="display: flex; align-items: center; padding: 0 20px; background: rgba(15, 23, 42, 0.7); border-bottom: 1px solid rgba(255, 255, 255, 0.06);">
+      <button class="teslacam-tab active" data-cat="sentry" id="tabSentry">
+        <span>🛡️ 哨兵事件</span>
+        <span id="badgeSentryCount" style="padding: 1px 6px; background: rgba(239,68,68,0.25); color: #f87171; border-radius: 9999px; font-size: 0.7rem;">0</span>
+      </button>
+      <button class="teslacam-tab" data-cat="saved" id="tabSaved">
+        <span>💾 手动/鸣笛保存</span>
+        <span id="badgeSavedCount" style="padding: 1px 6px; background: rgba(59,130,246,0.25); color: #60a5fa; border-radius: 9999px; font-size: 0.7rem;">0</span>
+      </button>
+      <button class="teslacam-tab" data-cat="recent" id="tabRecent">
+        <span>⏱️ 最近循环录像</span>
+        <span id="badgeRecentCount" style="padding: 1px 6px; background: rgba(148,163,184,0.2); color: #cbd5e1; border-radius: 9999px; font-size: 0.7rem;">0</span>
+      </button>
+    </div>
+
+    <!-- Integrated Multi-Angle Video Player (Hidden by default, shown on play) -->
+    <div id="teslaCamPlayerBox" style="display: none; padding: 14px 20px; background: #000; border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-weight: 600; font-size: 0.85rem; color: #f8fafc;" id="playerEventTitle">视频预览</span>
+          <span id="playerCamLabel" class="teslacam-badge teslacam-badge-blue">前视摄像头</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <button class="teslacam-view-btn active" data-cam="front" id="btnCamFront">前视</button>
+          <button class="teslacam-view-btn" data-cam="back" id="btnCamBack">后视</button>
+          <button class="teslacam-view-btn" data-cam="left" id="btnCamLeft">左翼子板</button>
+          <button class="teslacam-view-btn" data-cam="right" id="btnCamRight">右翼子板</button>
+          <button id="btnClosePlayer" style="margin-left: 6px; background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 1rem;">✕</button>
+        </div>
+      </div>
+      <div style="position: relative; width: 100%; aspect-ratio: 16/9; background: #0b0f19; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;">
+        <video id="teslaCamVideoTag" controls playsinline style="width: 100%; height: 100%; object-fit: contain;"></video>
+      </div>
+    </div>
+
+    <!-- Events List Scroll Area -->
+    <div id="teslaCamListContainer" style="flex: 1; min-height: 280px; max-height: 520px; overflow-y: auto; padding: 16px 20px;">
+      <div style="text-align: center; color: #94a3b8; padding: 40px 0;">
+        <div class="spinner" style="margin: 0 auto 12px;"></div>
+        <p>正在读取特斯拉 USB 磁盘录像列表...</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
 <script>
   const screen = document.getElementById('carplayScreen');
   const canvas = document.getElementById('viewportCanvas');
@@ -2096,12 +2284,12 @@
           if (videoTag.buffered && videoTag.buffered.length > 0) {
             const end = videoTag.buffered.end(videoTag.buffered.length - 1);
             const lag = end - videoTag.currentTime;
-            if (lag > 0.8) {
-              videoTag.currentTime = end - 0.05;
-              videoTag.playbackRate = 1.0;
-            } else if (lag > 0.15) {
-              videoTag.playbackRate = 1.06;
-            } else if (lag < 0.05) {
+            // Smooth Non-Seeking Lag Catch-up (Never seek currentTime in live MSE!)
+            if (lag > 0.6) {
+              videoTag.playbackRate = 1.25;
+            } else if (lag > 0.2) {
+              videoTag.playbackRate = 1.1;
+            } else if (lag < 0.08) {
               videoTag.playbackRate = 1.0;
             }
           }
@@ -5328,9 +5516,26 @@
     }
   }
 
-  if (btnVideoLogHud) btnVideoLogHud.addEventListener('click', (e) => { e.stopPropagation(); toggleVideoLogModal(); });
-  if (btnDockVideoLog) btnDockVideoLog.addEventListener('click', (e) => { e.stopPropagation(); toggleVideoLogModal(); });
-  if (btnEmptyVideoLog) btnEmptyVideoLog.addEventListener('click', (e) => { e.stopPropagation(); toggleVideoLogModal(); });
+  function bindTap(el, handler) {
+    if (!el) return;
+    let lastTap = 0;
+    const run = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const now = Date.now();
+      if (now - lastTap < 300) return; // Debounce
+      lastTap = now;
+      handler(e);
+    };
+    el.addEventListener('click', run);
+    el.addEventListener('touchend', run, { passive: false });
+  }
+
+  bindTap(document.getElementById('btnVideoLogHud'), toggleVideoLogModal);
+  bindTap(document.getElementById('btnDockVideoLog'), toggleVideoLogModal);
+  bindTap(document.getElementById('btnEmptyVideoLog'), toggleVideoLogModal);
+  bindTap(document.getElementById('btnHeaderTeslaCam'), toggleTeslaCamModal);
+  bindTap(document.getElementById('btnDockTeslaCam'), toggleTeslaCamModal);
   if (btnCloseVideoLog) btnCloseVideoLog.addEventListener('click', closeVideoLogModal);
   if (videoLogBackdrop) videoLogBackdrop.addEventListener('click', closeVideoLogModal);
   if (tagFpsLatency) {
@@ -5776,194 +5981,50 @@
     }
   });
 
+
+
+  // ====================================================
+  // Auto-Healing Video Pipeline Watchdog
+  // Monitors videoTag & Canvas; automatically recovers from stalls & requests IDR
+  // ====================================================
+  let lastWatchdogCheckTime = performance.now();
+  let lastWatchdogFrameCount = 0;
+  let stallDetectionCount = 0;
+
+  setInterval(() => {
+    if (currentStreamMode === 'hardware' || currentStreamMode === 'video_mse') {
+      const vTag = document.getElementById('carplayVideoTag');
+      if (!vTag) return;
+
+      // 1. If paused unexpectedly, resume play immediately
+      if (vTag.paused && hasReceivedVideoFrame) {
+        vTag.play().catch(() => {});
+      }
+
+      // 2. Check for freeze: frames arriving over WebSocket but video not advancing
+      const framesReceived = hudTotalRxFrames;
+      const isStreaming = performance.now() - lastVideoPacketTime < 1500;
+
+      if (isStreaming && framesReceived > lastWatchdogFrameCount + 10) {
+        if (vTag.readyState < 2 || vTag.seeking) {
+          stallDetectionCount++;
+          if (stallDetectionCount >= 2) { // Stalled for > 1.6 seconds
+            if (typeof sendRemoteLog === 'function') {
+              sendRemoteLog('[Watchdog] ⚠️ 检测到解码管线停滞 (readyState=' + vTag.readyState + ')，正在自愈并请求实时关键帧...');
+            }
+            if (ws && wsConnected) {
+              try { ws.send(JSON.stringify({ type: 'requestKeyFrame' })); } catch (_) {}
+            }
+            stallDetectionCount = 0;
+          }
+        } else {
+          stallDetectionCount = 0;
+        }
+      }
+      lastWatchdogFrameCount = framesReceived;
+    }
+  }, 800);
+
 </script>
-
-<!-- Video Decoder & Playback Diagnostics HUD Modal -->
-<div id="videoLogModal" class="system-modal" style="display: none;">
-  <div class="system-modal-backdrop" id="videoLogBackdrop"></div>
-  <div class="system-modal-card" style="max-width: 920px; width: 94%; max-height: 88vh; display: flex; flex-direction: column; background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(56, 189, 248, 0.35); box-shadow: 0 20px 50px rgba(0,0,0,0.8), 0 0 30px rgba(56, 189, 248, 0.2); backdrop-filter: blur(20px); border-radius: 16px; overflow: hidden;">
-    
-    <!-- Modal Header -->
-    <div style="padding: 14px 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); display: flex; align-items: center; justify-content: space-between; background: rgba(15, 23, 42, 0.8);">
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <span style="font-size: 1.35rem;">📺</span>
-        <div>
-          <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
-            车机视频播放与解码实时诊断 HUD
-            <span id="hudBadgeMode" style="font-size: 0.72rem; padding: 2px 8px; border-radius: 9999px; background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4);">检测中</span>
-          </h3>
-          <p style="margin: 2px 0 0; font-size: 0.76rem; color: #94a3b8;">
-            全面监控底层 WebSocket 数据流、MediaSource 缓冲队列、&lt;video&gt; 状态与 Canvas 渲染管道
-          </p>
-        </div>
-      </div>
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <button id="btnHudTriggerPlay" class="hud-action-btn" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4);" title="主动点击触发播放，突破车载浏览器自动播放拦截策略">
-          <span>▶️ 手动触发播放</span>
-        </button>
-        <button id="btnHudRestartPipeline" class="hud-action-btn" style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4);" title="销毁并重新初始化解码管线并索要全新实时关键帧">
-          <span>🔄 重启解码</span>
-        </button>
-        <button id="btnCloseVideoLog" style="background: rgba(255,255,255,0.08); border: none; color: #94a3b8; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 1.1rem; display: flex; align-items: center; justify-content: center;">✕</button>
-      </div>
-    </div>
-
-    <!-- Telemetry Cards Grid -->
-    <div style="padding: 12px 18px; background: rgba(0, 0, 0, 0.4); border-bottom: 1px solid rgba(255, 255, 255, 0.06); display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px;">
-      
-      <!-- Card 1: 协议与浏览器兼容 -->
-      <div class="hud-metric-card">
-        <div class="hud-metric-title">🌐 运行环境与能力</div>
-        <div id="hudEnvProtocol" class="hud-metric-val">HTTP (非安全环境)</div>
-        <div id="hudEnvMse" class="hud-metric-sub">MSE: 检测中...</div>
-      </div>
-
-      <!-- Card 2: 视频流接收 -->
-      <div class="hud-metric-card">
-        <div class="hud-metric-title">📡 数据流接收 (Rx)</div>
-        <div id="hudStreamFrames" class="hud-metric-val">帧数: 0 (IDR: 0)</div>
-        <div id="hudStreamBitrate" class="hud-metric-sub">码率: 0.0 Mbps · 0 FPS</div>
-      </div>
-
-      <!-- Card 3: <video> 标签播放器状态 -->
-      <div class="hud-metric-card">
-        <div class="hud-metric-title">🎬 &lt;video&gt; 播放器状态</div>
-        <div id="hudVideoState" class="hud-metric-val">readyState: 0</div>
-        <div id="hudVideoDetail" class="hud-metric-sub">尺寸: 0×0 · 暂停: 是</div>
-      </div>
-
-      <!-- Card 4: 缓冲与延迟 -->
-      <div class="hud-metric-card">
-        <div class="hud-metric-title">⏱️ MSE 缓冲与延迟</div>
-        <div id="hudBufferRange" class="hud-metric-val">缓冲: 无</div>
-        <div id="hudBufferLag" class="hud-metric-sub">延迟: 0.00s · updating: 否</div>
-      </div>
-
-      <!-- Card 5: 渲染管道 -->
-      <div class="hud-metric-card">
-        <div class="hud-metric-title">🎨 画面渲染目标</div>
-        <div id="hudCanvasState" class="hud-metric-val">Canvas 镜像</div>
-        <div id="hudCanvasDetail" class="hud-metric-sub">绘制: 0 帧</div>
-      </div>
-
-    </div>
-
-    <!-- Log Console Toolbar -->
-    <div style="padding: 8px 18px; display: flex; align-items: center; justify-content: space-between; background: rgba(15, 23, 42, 0.7); border-bottom: 1px solid rgba(255, 255, 255, 0.05); font-size: 0.8rem;">
-      <div style="display: flex; align-items: center; gap: 8px; color: #94a3b8;">
-        <span>📜 实时解码日志流 (快捷键 D 可随时开启/关闭)</span>
-        <span id="hudLogCount" style="padding: 1px 6px; background: rgba(255,255,255,0.1); border-radius: 4px; font-size: 0.72rem;">0 条</span>
-      </div>
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; color: #cbd5e1; font-size: 0.75rem;">
-          <input type="checkbox" id="checkHudAutoScroll" checked style="accent-color: var(--accent);"> 自动滚屏
-        </label>
-        <button id="btnHudCopyLog" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #e2e8f0; padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; cursor: pointer;">
-          📋 复制全部
-        </button>
-        <button id="btnHudClearLog" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); color: #f87171; padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; cursor: pointer;">
-          🧹 清空
-        </button>
-      </div>
-    </div>
-
-    <!-- Scrollable Log Screen -->
-    <div id="hudLogContainer" style="flex: 1; min-height: 240px; max-height: 380px; overflow-y: auto; padding: 12px 16px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.75rem; line-height: 1.5; color: #e2e8f0; background: #050811;">
-      <!-- Dynamic Log Lines will be appended here -->
-    </div>
-
-  </div>
-</div>
-
-
-<!-- TeslaCam Dashcam & Sentry Management Modal -->
-<div id="teslaCamModal" class="system-modal" style="display: none;">
-  <div class="system-modal-backdrop" id="teslaCamBackdrop"></div>
-  <div class="system-modal-card" style="max-width: 980px; width: 94%; max-height: 90vh; display: flex; flex-direction: column; background: rgba(15, 23, 42, 0.96); border: 1px solid rgba(239, 68, 68, 0.35); box-shadow: 0 25px 60px rgba(0,0,0,0.85), 0 0 30px rgba(239, 68, 68, 0.15); backdrop-filter: blur(24px); border-radius: 16px; overflow: hidden;">
-    
-    <!-- Modal Header -->
-    <div style="padding: 14px 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); display: flex; align-items: center; justify-content: space-between; background: rgba(15, 23, 42, 0.85);">
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <span style="font-size: 1.4rem; color: #ef4444;">🛡️</span>
-        <div>
-          <h3 style="margin: 0; font-size: 1.1rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
-            特斯拉行车记录仪与哨兵影像管理
-            <span id="teslaCamStatusBadge" class="teslacam-badge teslacam-badge-red">检测中...</span>
-          </h3>
-          <p style="margin: 2px 0 0; font-size: 0.76rem; color: #94a3b8;">
-            连接手套箱常供电 USB 端口 · 支持四视角在线回放预览、单文件极速提取与整事件打包 ZIP 下载
-          </p>
-        </div>
-      </div>
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <button id="btnRefreshTeslaCam" class="teslacam-btn teslacam-btn-sec" title="通知内核同步磁盘并拉取特斯拉刚刚写入的最新影像">
-          <span>🔄 同步最新影像</span>
-        </button>
-        <button id="btnCloseTeslaCam" style="background: rgba(255,255,255,0.08); border: none; color: #94a3b8; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 1.1rem; display: flex; align-items: center; justify-content: center;">✕</button>
-      </div>
-    </div>
-
-    <!-- Storage Telemetry Banner -->
-        <!-- Hardware OTG & Model Diagnostic Banner -->
-    <div id="teslaCamHardwareAlert" style="display: none; margin: 8px 18px; padding: 10px 14px; border-radius: 8px; font-size: 0.78rem; line-height: 1.5;"></div>
-
-    <div style="padding: 10px 20px; background: rgba(0, 0, 0, 0.4); border-bottom: 1px solid rgba(255, 255, 255, 0.06); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; font-size: 0.8rem;">
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <span style="color: #cbd5e1;">💾 存储盘: <strong id="teslaCamDiskModel" style="color: #f1f5f9;">TeslaCam USB Storage</strong></span>
-        <span style="color: #64748b;">|</span>
-        <span style="color: #cbd5e1;">空间占用: <strong id="teslaCamSpaceText" style="color: #38bdf8;">-- / -- (--%)</strong></span>
-      </div>
-      <div style="flex: 1; max-width: 220px; height: 6px; background: rgba(255,255,255,0.1); border-radius: 9999px; overflow: hidden;">
-        <div id="teslaCamSpaceBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #38bdf8, #ef4444); transition: width 0.3s ease;"></div>
-      </div>
-    </div>
-
-    <!-- Category Tabs -->
-    <div style="display: flex; align-items: center; padding: 0 20px; background: rgba(15, 23, 42, 0.7); border-bottom: 1px solid rgba(255, 255, 255, 0.06);">
-      <button class="teslacam-tab active" data-cat="sentry" id="tabSentry">
-        <span>🛡️ 哨兵事件</span>
-        <span id="badgeSentryCount" style="padding: 1px 6px; background: rgba(239,68,68,0.25); color: #f87171; border-radius: 9999px; font-size: 0.7rem;">0</span>
-      </button>
-      <button class="teslacam-tab" data-cat="saved" id="tabSaved">
-        <span>💾 手动/鸣笛保存</span>
-        <span id="badgeSavedCount" style="padding: 1px 6px; background: rgba(59,130,246,0.25); color: #60a5fa; border-radius: 9999px; font-size: 0.7rem;">0</span>
-      </button>
-      <button class="teslacam-tab" data-cat="recent" id="tabRecent">
-        <span>⏱️ 最近循环录像</span>
-        <span id="badgeRecentCount" style="padding: 1px 6px; background: rgba(148,163,184,0.2); color: #cbd5e1; border-radius: 9999px; font-size: 0.7rem;">0</span>
-      </button>
-    </div>
-
-    <!-- Integrated Multi-Angle Video Player (Hidden by default, shown on play) -->
-    <div id="teslaCamPlayerBox" style="display: none; padding: 14px 20px; background: #000; border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="font-weight: 600; font-size: 0.85rem; color: #f8fafc;" id="playerEventTitle">视频预览</span>
-          <span id="playerCamLabel" class="teslacam-badge teslacam-badge-blue">前视摄像头</span>
-        </div>
-        <div style="display: flex; align-items: center; gap: 6px;">
-          <button class="teslacam-view-btn active" data-cam="front" id="btnCamFront">前视</button>
-          <button class="teslacam-view-btn" data-cam="back" id="btnCamBack">后视</button>
-          <button class="teslacam-view-btn" data-cam="left" id="btnCamLeft">左翼子板</button>
-          <button class="teslacam-view-btn" data-cam="right" id="btnCamRight">右翼子板</button>
-          <button id="btnClosePlayer" style="margin-left: 6px; background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 1rem;">✕</button>
-        </div>
-      </div>
-      <div style="position: relative; width: 100%; aspect-ratio: 16/9; background: #0b0f19; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;">
-        <video id="teslaCamVideoTag" controls playsinline style="width: 100%; height: 100%; object-fit: contain;"></video>
-      </div>
-    </div>
-
-    <!-- Events List Scroll Area -->
-    <div id="teslaCamListContainer" style="flex: 1; min-height: 280px; max-height: 520px; overflow-y: auto; padding: 16px 20px;">
-      <div style="text-align: center; color: #94a3b8; padding: 40px 0;">
-        <div class="spinner" style="margin: 0 auto 12px;"></div>
-        <p>正在读取特斯拉 USB 磁盘录像列表...</p>
-      </div>
-    </div>
-
-  </div>
-</div>
-
 </body>
 </html>
