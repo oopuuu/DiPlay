@@ -10,6 +10,13 @@
     locateFile: function(path) {
       if (path && path.endsWith('.wasm')) return '/' + path;
       return path;
+    },
+    onRuntimeInitialized: function() {
+      window.isWasmRuntimeReady = true;
+      console.log('[WASM] FFmpeg H.264 WebAssembly runtime initialized!');
+      if (typeof window.onWasmReady === 'function') {
+        window.onWasmReady();
+      }
     }
   };
 </script>
@@ -2248,19 +2255,23 @@
                 }
                 initWebCodecsDecoder(codecStr, avcCBuffer);
               } else {
-                if (wasmDecoderOpen && cachedAnnexBConfig) {
-                  try {
-                    const cfg = new Uint8Array(cachedAnnexBConfig);
-                    const p = Module._malloc(cfg.length);
-                    Module.HEAPU8.set(cfg, p);
-                    Module._decodeData(p, cfg.length, wasmPts++);
-                    Module._free(p);
-                  } catch (_) {}
-                }
-                if (!jmuxerPlayer && typeof JMuxer !== 'undefined') initJMuxer();
-                if (jmuxerPlayer && cachedAnnexBConfig) {
-                  jmuxerPlayer.feed({ video: cachedAnnexBConfig, isLastVideoFrameComplete: true });
-                  mseKeyframeFed = true;
+                if (currentStreamMode !== 'video_mse') {
+                  if (!wasmDecoderOpen) initWasmPlayer();
+                  if (wasmDecoderOpen && cachedAnnexBConfig) {
+                    try {
+                      const cfg = new Uint8Array(cachedAnnexBConfig);
+                      const p = Module._malloc(cfg.length);
+                      Module.HEAPU8.set(cfg, p);
+                      Module._decodeData(p, cfg.length, wasmPts++);
+                      Module._free(p);
+                    } catch (_) {}
+                  }
+                } else {
+                  if (!jmuxerPlayer && typeof JMuxer !== 'undefined') initJMuxer();
+                  if (jmuxerPlayer && cachedAnnexBConfig) {
+                    jmuxerPlayer.feed({ video: cachedAnnexBConfig, isLastVideoFrameComplete: true });
+                    mseKeyframeFed = true;
+                  }
                 }
               }
               return;
@@ -2803,6 +2814,8 @@
   let wasmAllocatedPtr = 0;
   let wasmAllocatedCap = 0;
   let wasmCallbackPtr = 0;
+  let cachedWasmFrameData = null;
+  let cachedWasmFrameSize = 0;
 
   function initWasmPlayer() {
     if (wasmDecoderOpen) return true;
@@ -2819,6 +2832,7 @@
 
       if (!wasmCallbackPtr) {
         wasmCallbackPtr = Module.addFunction(function (addr_y, addr_u, addr_v, stride_y, stride_u, stride_v, width, height, pts) {
+          lastWebCodecsFrameTime = performance.now(); // Keep watchdog alive!
           if (wasmCanvas.width !== width || wasmCanvas.height !== height) {
             wasmCanvas.width = width;
             wasmCanvas.height = height;
@@ -2828,7 +2842,11 @@
           }
 
           const size = width * height + (width / 2) * (height / 2) * 2;
-          const frameData = new Uint8Array(size);
+          if (!cachedWasmFrameData || cachedWasmFrameSize !== size) {
+            cachedWasmFrameData = new Uint8Array(size);
+            cachedWasmFrameSize = size;
+          }
+          const frameData = cachedWasmFrameData;
           let pos = 0;
 
           for (let i = 0; i < height; i++) {
@@ -2858,7 +2876,7 @@
             if (screen) screen.style.display = 'none';
             emptyOverlay.classList.add('hidden');
             updateStatusBadge();
-            sendRemoteLog('[WASM-WebGL] 行车防黑屏视频已点亮！');
+            sendRemoteLog('[WASM-WebGL] 行车防黑屏视频已点亮 (100% 独立 WebGL 画布渲染)！');
           }
 
           videoFrameCounter++;
@@ -2867,7 +2885,7 @@
             currentVideoFps = Math.round((videoFrameCounter * 1000) / (now - videoFpsInterval));
             videoFrameCounter = 0;
             videoFpsInterval = now;
-            updateFpsDisplay(currentVideoFps, 'WebGL软解');
+            updateFpsDisplay(currentVideoFps, 'WebGL独立软解');
           }
         }, 'viiiiiiiii');
       }
@@ -2897,6 +2915,12 @@
     }
   }
 
+  window.onWasmReady = function() {
+    if (currentStreamMode === 'hardware' && !hasWebCodecs) {
+      initWasmPlayer();
+    }
+  };
+
   function handleVideoChunkWasm(naluBuffer, isKey) {
     lastVideoPacketTime = performance.now();
     if (!wasmDecoderOpen) {
@@ -2908,7 +2932,7 @@
         const now = Date.now();
         if (now - lastKeyframeRequestTime > 1000) {
           lastKeyframeRequestTime = now;
-          if (ws && wsConnected) {
+          if (ws && wsConnected && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'requestKeyFrame' }));
           }
         }
@@ -2928,7 +2952,15 @@
     }
 
     try {
-      const u8 = new Uint8Array(naluBuffer);
+      let u8 = new Uint8Array(naluBuffer);
+      if (isKey && cachedAnnexBConfig) {
+        if (u8.length >= 5 && (u8[4] & 0x1f) !== 7) {
+          const merged = new Uint8Array(cachedAnnexBConfig.length + u8.length);
+          merged.set(cachedAnnexBConfig, 0);
+          merged.set(u8, cachedAnnexBConfig.length);
+          u8 = merged;
+        }
+      }
       const len = u8.length;
       if (len > wasmAllocatedCap) {
         if (wasmAllocatedPtr) Module._free(wasmAllocatedPtr);
@@ -2943,11 +2975,11 @@
   }
 
   let rawStoredMode = localStorage.getItem('diplay_stream_mode');
-  let currentStreamMode = (rawStoredMode === 'canvas_mirror' || rawStoredMode === 'mjpeg') ? 'canvas_mirror' : 'hardware';
+  let currentStreamMode = (rawStoredMode === 'video_mse') ? 'video_mse' : 'hardware';
 
   function applyStreamMode(mode, showNotice) {
-    if (mode === 'video_mse' || mode === 'canvas_mirror' || mode === 'mjpeg') {
-      currentStreamMode = (mode === 'video_mse') ? 'video_mse' : 'hardware';
+    if (mode === 'video_mse') {
+      currentStreamMode = 'video_mse';
     } else {
       currentStreamMode = 'hardware';
     }
@@ -2963,7 +2995,6 @@
     const broadwayCvs = document.getElementById('carplayBroadwayCanvas');
 
     if (screen) screen.style.display = 'none';
-    if (broadwayCvs) broadwayCvs.style.display = 'none';
 
     if (currentStreamMode === 'hardware') {
       if (checkPlanA) checkPlanA.style.display = 'inline';
@@ -2973,31 +3004,46 @@
       if (labelStreamMode) labelStreamMode.textContent = 'Canvas直出';
       if (iconStreamMode) iconStreamMode.textContent = '⚡';
 
-      if (videoCanvas) {
-        videoCanvas.style.display = 'block';
-        videoCanvas.style.opacity = '1';
-        videoCanvas.style.zIndex = '5';
-        videoCanvas.style.pointerEvents = 'auto';
+      // 1. MUST completely disable and hide videoTag so Tesla OS cannot detect any HTMLMediaElement in D-gear!
+      if (videoTag) {
+        try { videoTag.pause(); } catch (_) {}
+        videoTag.removeAttribute('src');
+        videoTag.load();
+        videoTag.style.display = 'none';
+        videoTag.style.pointerEvents = 'none';
       }
+      if (jmuxerPlayer) {
+        try { jmuxerPlayer.destroy(); } catch (_) {}
+        jmuxerPlayer = null;
+      }
+      canvasMirrorRunning = false;
 
       if (hasWebCodecs) {
-        if (videoTag) {
-          try { videoTag.pause(); } catch (_) {}
-          videoTag.style.display = 'none';
+        if (broadwayCvs) broadwayCvs.style.display = 'none';
+        if (videoCanvas) {
+          videoCanvas.style.display = 'block';
+          videoCanvas.style.opacity = '1';
+          videoCanvas.style.zIndex = '5';
+          videoCanvas.style.pointerEvents = 'auto';
         }
         if (showNotice) showToast('⚡ 已切换为「Canvas 硬件流 (WebCodecs)」');
       } else {
-        // Plain HTTP / Tesla Car without internet:
-        // Run MSE video in background and mirror directly to Canvas (D-gear anti-pause!)
-        if (videoTag) {
-          videoTag.style.display = 'block';
-          videoTag.style.opacity = '0.001';
-          videoTag.style.zIndex = '1';
-          videoTag.style.pointerEvents = 'none';
-          videoTag.play().catch(function() {});
+        // Plain HTTP / Tesla Car without HTTPS:
+        // Run 100% WebGL Canvas Software Decode (libffmpeg_264.wasm + WebGL shaders)!
+        // Zero <video> tag on DOM -> Tesla D-gear NEVER blacks out!
+        if (videoCanvas) {
+          videoCanvas.style.display = 'none';
+          videoCanvas.style.pointerEvents = 'none';
         }
-        startCanvasMirrorLoop();
-        if (showNotice) showToast('⚡ 已启用「Canvas 硬件镜像流 (行车防暂停/纯HTTP)」');
+        if (broadwayCvs) {
+          broadwayCvs.style.display = 'block';
+          broadwayCvs.style.opacity = '1';
+          broadwayCvs.style.zIndex = '5';
+          broadwayCvs.style.pointerEvents = 'auto';
+        }
+        initWasmPlayer();
+        if (showNotice) showToast('⚡ 已启用「Canvas WebGL 独立软解 (挂D档绝不黑屏/纯HTTP)」');
+        sendRemoteLog('[StreamMode] 已启用 Canvas WebGL 独立解码 (彻底脱离<video>标签，D档防黑屏就绪)');
       }
 
       if (hasReceivedVideoFrame) {
@@ -3005,7 +3051,7 @@
         updateStatusBadge();
       }
     } else {
-      // 方案 B：Video 标签直出流 (MSE)
+      // 方案 B：Video 标签直出流 (MSE / 驻车备用)
       if (checkPlanA) checkPlanA.style.display = 'none';
       if (checkPlanB) checkPlanB.style.display = 'inline';
       if (btnSelectPlanA) btnSelectPlanA.classList.remove('current');
@@ -3013,6 +3059,10 @@
       if (labelStreamMode) labelStreamMode.textContent = 'Video流';
       if (iconStreamMode) iconStreamMode.textContent = '🎬';
 
+      if (broadwayCvs) {
+        broadwayCvs.style.display = 'none';
+        broadwayCvs.style.pointerEvents = 'none';
+      }
       if (videoCanvas) {
         videoCanvas.style.display = 'none';
         videoCanvas.style.pointerEvents = 'none';
@@ -3025,13 +3075,16 @@
         videoTag.style.pointerEvents = 'auto';
         videoTag.play().catch(function() {});
       }
+      if (!jmuxerPlayer && typeof JMuxer !== 'undefined') {
+        initJMuxer();
+      }
 
       if (hasReceivedVideoFrame) {
         emptyOverlay.classList.add('hidden');
         updateStatusBadge();
       }
 
-      if (showNotice) showToast('🎬 已切换为「方案 B：Video 标签硬件流」');
+      if (showNotice) showToast('🎬 已切换为「方案 B：Video 标签硬件流 (驻车备用)」');
     }
 
     if (typeof updateResolutionDisplay === 'function') updateResolutionDisplay();
@@ -3282,10 +3335,15 @@
           sendRemoteLog('[WebCodecs] Chunk decode exception: ' + (e ? (e.message || e) : ''));
         }
         return;
+      } else {
+        // Plain HTTP / Tesla Car without HTTPS:
+        // Feed into 100% WebGL Canvas Software Decode (libffmpeg_264.wasm + WebGL shaders)!
+        // Zero <video> tag on DOM -> Tesla D-gear NEVER blacks out!
+        handleVideoChunkWasm(naluBuffer, isKey);
+        return;
       }
     }
-    // Plain HTTP / Tesla Car without HTTPS: Feed through MSE hardware decoding!
-    // (Plan A mirrors MSE video to Canvas at 60 FPS; Plan B displays Video directly)
+    // Plan B: Video Tag MSE hardware decoding (for Park/non-Tesla environments)
     handleVideoChunkMSE(naluBuffer, isKey);
   }
 
