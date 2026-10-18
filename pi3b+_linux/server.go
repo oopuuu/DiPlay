@@ -2098,7 +2098,7 @@ func sendWsFrame(conn net.Conn, opcode byte, payload []byte) error {
 	}
 
 	bufs := net.Buffers{header[:hLen], payload}
-	_ = conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+	_ = conn.SetWriteDeadline(time.Now().Add(120 * time.Millisecond))
 	_, err := bufs.WriteTo(conn)
 	return err
 }
@@ -2127,9 +2127,9 @@ func sendMultiplexBinary(conn net.Conn, channel byte, flag byte, data []byte) er
 	header[hLen+3] = 0
 	hLen += 4
 
-	// Atomic write using net.Buffers with 500ms deadline.
+	// Atomic write using net.Buffers with 120ms deadline (prevents HOL blocking at 60 FPS).
 	bufs := net.Buffers{header[:hLen], data}
-	_ = conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+	_ = conn.SetWriteDeadline(time.Now().Add(120 * time.Millisecond))
 	_, err := bufs.WriteTo(conn)
 	return err
 }

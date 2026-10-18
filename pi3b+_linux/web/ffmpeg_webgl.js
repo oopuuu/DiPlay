@@ -8,6 +8,8 @@ function Texture(gl) {
 
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.width = 0;
+    this.height = 0;
 }
 
 Texture.prototype.bind = function (n, program, name) {
@@ -20,12 +22,32 @@ Texture.prototype.bind = function (n, program, name) {
 Texture.prototype.fill = function (width, height, data) {
     var gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, height, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, data);
+    if (this.width !== width || this.height !== height) {
+        this.width = width;
+        this.height = height;
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, height, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, data);
+    } else {
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, gl.LUMINANCE, gl.UNSIGNED_BYTE, data);
+    }
 };
 
 function WebGLPlayer(canvas, options) {
     this.canvas = canvas;
-    this.gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+    var glOpts = {
+        alpha: false,
+        depth: false,
+        stencil: false,
+        antialias: false,
+        preserveDrawingBuffer: false,
+        powerPreference: "high-performance",
+        desynchronized: true
+    };
+    if (options) {
+        for (var k in options) {
+            glOpts[k] = options[k];
+        }
+    }
+    this.gl = canvas.getContext("webgl", glOpts) || canvas.getContext("experimental-webgl", glOpts);
     this.initGL(options);
 }
 
@@ -107,14 +129,62 @@ WebGLPlayer.prototype.renderFrame = function (videoFrame, width, height, uOffset
     }
 
     var gl = this.gl;
-    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-    gl.clearColor(0.0, 0.0, 0.0, 0.0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    if (gl.canvas.width !== width || gl.canvas.height !== height) {
+        gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    }
 
     gl.y.fill(width, height, videoFrame.subarray(0, uOffset));
     gl.u.fill(width >> 1, height >> 1, videoFrame.subarray(uOffset, uOffset + vOffset));
     gl.v.fill(width >> 1, height >> 1, videoFrame.subarray(uOffset + vOffset, videoFrame.length));
 
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+};
+
+WebGLPlayer.prototype.renderDirectYUV = function (u8Heap, addr_y, addr_u, addr_v, width, height, stride_y, stride_u, stride_v) {
+    if (!this.gl) return;
+    var gl = this.gl;
+    if (gl.canvas.width !== width || gl.canvas.height !== height) {
+        gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    }
+    var yLen = width * height;
+    var uvWidth = width >> 1;
+    var uvHeight = height >> 1;
+    var uvLen = uvWidth * uvHeight;
+
+    if (stride_y === width && stride_u === uvWidth && stride_v === uvWidth) {
+        // 100% Zero-copy direct DMA upload from Emscripten WASM Heap via texSubImage2D!
+        gl.y.fill(width, height, u8Heap.subarray(addr_y, addr_y + yLen));
+        gl.u.fill(uvWidth, uvHeight, u8Heap.subarray(addr_u, addr_u + uvLen));
+        gl.v.fill(uvWidth, uvHeight, u8Heap.subarray(addr_v, addr_v + uvLen));
+    } else {
+        // Fallback for padded strides
+        if (!this.bufY || this.bufY.length !== yLen) {
+            this.bufY = new Uint8Array(yLen);
+            this.bufU = new Uint8Array(uvLen);
+            this.bufV = new Uint8Array(uvLen);
+        }
+        var pos = 0;
+        for (var i = 0; i < height; i++) {
+            var src = addr_y + i * stride_y;
+            this.bufY.set(u8Heap.subarray(src, src + width), pos);
+            pos += width;
+        }
+        pos = 0;
+        for (var i = 0; i < uvHeight; i++) {
+            var src = addr_u + i * stride_u;
+            this.bufU.set(u8Heap.subarray(src, src + uvWidth), pos);
+            pos += uvWidth;
+        }
+        pos = 0;
+        for (var i = 0; i < uvHeight; i++) {
+            var src = addr_v + i * stride_v;
+            this.bufV.set(u8Heap.subarray(src, src + uvWidth), pos);
+            pos += uvWidth;
+        }
+        gl.y.fill(width, height, this.bufY);
+        gl.u.fill(uvWidth, uvHeight, this.bufU);
+        gl.v.fill(uvWidth, uvHeight, this.bufV);
+    }
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 };
 

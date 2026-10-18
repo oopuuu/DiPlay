@@ -2820,42 +2820,25 @@
             if (typeof updateResolutionDisplay === 'function') updateResolutionDisplay();
           }
 
-          const size = width * height + (width / 2) * (height / 2) * 2;
-          if (!cachedWasmFrameData || cachedWasmFrameSize !== size) {
-            cachedWasmFrameData = new Uint8Array(size);
-            cachedWasmFrameSize = size;
-          }
-          const frameData = cachedWasmFrameData;
-          let pos = 0;
-
-          const yLength = width * height;
-          const uvLength = (width >> 1) * (height >> 1);
-
-          if (stride_y === width && stride_u === (width >> 1) && stride_v === (width >> 1)) {
-            // Fast contiguous copy (saves thousands of JS loop iterations per frame)
-            frameData.set(Module.HEAPU8.subarray(addr_y, addr_y + yLength), 0);
-            frameData.set(Module.HEAPU8.subarray(addr_u, addr_u + uvLength), yLength);
-            frameData.set(Module.HEAPU8.subarray(addr_v, addr_v + uvLength), yLength + uvLength);
-          } else {
-            for (let i = 0; i < height; i++) {
-              const src = addr_y + i * stride_y;
-              frameData.set(Module.HEAPU8.subarray(src, src + width), pos);
-              pos += width;
-            }
-            for (let i = 0; i < height / 2; i++) {
-              const src = addr_u + i * stride_u;
-              frameData.set(Module.HEAPU8.subarray(src, src + width / 2), pos);
-              pos += width / 2;
-            }
-            for (let i = 0; i < height / 2; i++) {
-              const src = addr_v + i * stride_v;
-              frameData.set(Module.HEAPU8.subarray(src, src + width / 2), pos);
-              pos += width / 2;
-            }
-          }
-
           if (wasmPlayer) {
-            wasmPlayer.renderFrame(frameData, width, height, yLength, uvLength);
+            if (typeof wasmPlayer.renderDirectYUV === 'function') {
+              wasmPlayer.renderDirectYUV(Module.HEAPU8, addr_y, addr_u, addr_v, width, height, stride_y, stride_u, stride_v);
+            } else {
+              const size = width * height + (width / 2) * (height / 2) * 2;
+              if (!cachedWasmFrameData || cachedWasmFrameSize !== size) {
+                cachedWasmFrameData = new Uint8Array(size);
+                cachedWasmFrameSize = size;
+              }
+              const frameData = cachedWasmFrameData;
+              const yLength = width * height;
+              const uvLength = (width >> 1) * (height >> 1);
+              if (stride_y === width && stride_u === (width >> 1) && stride_v === (width >> 1)) {
+                frameData.set(Module.HEAPU8.subarray(addr_y, addr_y + yLength), 0);
+                frameData.set(Module.HEAPU8.subarray(addr_u, addr_u + uvLength), yLength);
+                frameData.set(Module.HEAPU8.subarray(addr_v, addr_v + uvLength), yLength + uvLength);
+              }
+              wasmPlayer.renderFrame(frameData, width, height, yLength, uvLength);
+            }
           }
 
           if (!hasReceivedVideoFrame) {
