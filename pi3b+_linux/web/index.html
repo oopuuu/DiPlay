@@ -2720,35 +2720,9 @@
   let mseKeyframeFed = false;
   let canvasMirrorRunning = false;
   function startCanvasMirrorLoop() {
-    if (canvasMirrorRunning) return;
-    canvasMirrorRunning = true;
-    const vTag = document.getElementById('carplayVideoTag');
-    const vCvs = document.getElementById('carplayVideoCanvas');
-    const ctx = vCvs ? vCvs.getContext('2d') : null;
-    function step() {
-      if (currentStreamMode === 'hardware' || currentStreamMode === 'canvas_mirror') {
-        if (!hasWebCodecs && vTag && vCvs && ctx) {
-          if (vTag.readyState >= 2 && !vTag.paused && vTag.videoWidth > 0) {
-            if (vCvs.width !== vTag.videoWidth || vCvs.height !== vTag.videoHeight) {
-              vCvs.width = vTag.videoWidth;
-              vCvs.height = vTag.videoHeight;
-              currentWidth = vTag.videoWidth;
-              currentHeight = vTag.videoHeight;
-              if (typeof updateResolutionDisplay === 'function') updateResolutionDisplay();
-            }
-            ctx.drawImage(vTag, 0, 0, vCvs.width, vCvs.height);
-            if (!hasReceivedVideoFrame) {
-              hasReceivedVideoFrame = true;
-              emptyOverlay.classList.add('hidden');
-              updateStatusBadge();
-              sendRemoteLog('[CanvasMirror] 画面已成功镜像渲染至 Canvas (行车防黑屏)');
-            }
-          }
-        }
-      }
-      requestAnimationFrame(step);
-    }
-    requestAnimationFrame(step);
+    // Deprecated legacy hook: DiPlay uses 100% direct WebCodecs VideoFrame or WASM/WebGL directly to Canvas.
+    // Zero dependency on <video> tags to guarantee Tesla D-gear never pauses playback!
+    canvasMirrorRunning = false;
   }
 
   function handleVideoChunkMSE(naluBuffer, isKey) {
