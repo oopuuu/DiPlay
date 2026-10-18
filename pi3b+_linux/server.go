@@ -2608,6 +2608,9 @@ type TeslaCamStatus struct {
 	RecentCount int     `json:"recent_count"`
 	TotalEvents int     `json:"total_events"`
 	DriveModel  string  `json:"drive_model"`
+	PiModel     string  `json:"pi_model"`
+	IsPi3       bool    `json:"is_pi3"`
+	HasUdc      bool    `json:"has_udc"`
 }
 
 func getTeslaCamRootDir() string {
@@ -2701,6 +2704,21 @@ func handleTeslaCamStatus(w http.ResponseWriter, r *http.Request) {
 		status.DriveModel = strings.TrimSpace(string(modelBytes))
 	} else {
 		status.DriveModel = "TeslaCam USB Storage"
+	}
+
+	// Detect Pi model
+	if mBytes, err := os.ReadFile("/sys/firmware/devicetree/base/model"); err == nil {
+		status.PiModel = strings.TrimRight(string(mBytes), "\x00\r\n ")
+	} else {
+		status.PiModel = "Raspberry Pi"
+	}
+	if strings.Contains(status.PiModel, "Raspberry Pi 3") {
+		status.IsPi3 = true
+	}
+
+	// Check UDC hardware
+	if udcEntries, err := os.ReadDir("/sys/class/udc"); err == nil && len(udcEntries) > 0 {
+		status.HasUdc = true
 	}
 
 	// Count events
