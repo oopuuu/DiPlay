@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
 	"context"
@@ -457,6 +458,11 @@ func main() {
 	mux.HandleFunc("/api/terminal/export", handleTerminalExport)
 	mux.HandleFunc("/api/terminal/download", handleTerminalDownload)
 	mux.HandleFunc("/api/system/upgrade", handleSystemUpgrade)
+	mux.HandleFunc("/api/teslacam/status", handleTeslaCamStatus)
+	mux.HandleFunc("/api/teslacam/events", handleTeslaCamEvents)
+	mux.HandleFunc("/api/teslacam/stream", handleTeslaCamStream)
+	mux.HandleFunc("/api/teslacam/download_zip", handleTeslaCamDownloadZip)
+	mux.HandleFunc("/api/teslacam/refresh", handleTeslaCamRefresh)
 	mux.HandleFunc("/snapshot", handleSnapshot)
 	mux.HandleFunc("/stream", handleSnapshot)
 
@@ -2562,4 +2568,460 @@ func startEmbeddedDNSServer() {
 	}
 }
 
+// ============================================================================
+// TeslaCam USB Storage & Dashcam Video Management APIs
+// ============================================================================
 
+type TeslaCamClip struct {
+	Camera   string `json:"camera"`    // front, back, left_repeater, right_repeater
+	FileName string `json:"file_name"` // 2026-10-18_14-25-30-front.mp4
+	FilePath string `json:"file_path"` // relative path: SentryClips/2026-10-18_14-25-30/2026-10-18_14-25-30-front.mp4
+	FileSize int64  `json:"file_size"`
+	ModTime  int64  `json:"mod_time"`
+}
+
+type TeslaCamEvent struct {
+	ID        string         `json:"id"`       // 2026-10-18_14-25-30
+	Category  string         `json:"category"` // sentry, saved, recent
+	Timestamp string         `json:"timestamp"`
+	Reason    string         `json:"reason"` // Sentry Aware / Honk / User Save
+	City      string         `json:"city"`
+	Clips     []TeslaCamClip `json:"clips"`
+	TotalSize int64          `json:"total_size"`
+	HasFront  bool           `json:"has_front"`
+	HasBack   bool           `json:"has_back"`
+	HasLeft   bool           `json:"has_left"`
+	HasRight  bool           `json:"has_right"`
+	ThumbPath string         `json:"thumb_path,omitempty"`
+}
+
+type TeslaCamStatus struct {
+	Supported   bool    `json:"supported"`
+	Active      bool    `json:"active"`
+	MountPath   string  `json:"mount_path"`
+	TotalBytes  uint64  `json:"total_bytes"`
+	FreeBytes   uint64  `json:"free_bytes"`
+	UsedBytes   uint64  `json:"used_bytes"`
+	UsedPercent float64 `json:"used_percent"`
+	SentryCount int     `json:"sentry_count"`
+	SavedCount  int     `json:"saved_count"`
+	RecentCount int     `json:"recent_count"`
+	TotalEvents int     `json:"total_events"`
+	DriveModel  string  `json:"drive_model"`
+}
+
+func getTeslaCamRootDir() string {
+	if custom := os.Getenv("TESLACAM_PATH"); custom != "" {
+		if fi, err := os.Stat(custom); err == nil && fi.IsDir() {
+			if sub, err := os.Stat(filepath.Join(custom, "TeslaCam")); err == nil && sub.IsDir() {
+				return filepath.Join(custom, "TeslaCam")
+			}
+			return custom
+		}
+	}
+
+	candidates := []string{
+		"/mnt/teslacam/TeslaCam",
+		"/mnt/teslacam",
+		"/media/teslacam/TeslaCam",
+		"/media/teslacam",
+		"/var/teslacam/TeslaCam",
+		"/var/teslacam",
+		"/opt/diplay/teslacam/TeslaCam",
+		"/opt/diplay/teslacam",
+	}
+
+	for _, c := range candidates {
+		if fi, err := os.Stat(c); err == nil && fi.IsDir() {
+			return c
+		}
+	}
+
+	// Default fallback path
+	fallback := "/mnt/teslacam"
+	_ = os.MkdirAll(filepath.Join(fallback, "TeslaCam", "RecentClips"), 0755)
+	_ = os.MkdirAll(filepath.Join(fallback, "TeslaCam", "SavedClips"), 0755)
+	_ = os.MkdirAll(filepath.Join(fallback, "TeslaCam", "SentryClips"), 0755)
+	return filepath.Join(fallback, "TeslaCam")
+}
+
+func parseEventReason(eventDir string) (string, string) {
+	jsonPath := filepath.Join(eventDir, "event.json")
+	data, err := os.ReadFile(jsonPath)
+	if err != nil {
+		return "", ""
+	}
+	var meta struct {
+		Reason string `json:"reason"`
+		City   string `json:"city"`
+	}
+	if err := json.Unmarshal(data, &meta); err == nil {
+		return meta.Reason, meta.City
+	}
+	return "", ""
+}
+
+func sanitizeTeslaFileName(name string) string {
+	clean := strings.ReplaceAll(name, "/", "_")
+	clean = strings.ReplaceAll(clean, "\\", "_")
+	clean = strings.ReplaceAll(clean, "..", "")
+	return clean
+}
+
+func handleTeslaCamStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	rootDir := getTeslaCamRootDir()
+
+	status := TeslaCamStatus{
+		Supported: true,
+		Active:    false,
+		MountPath: rootDir,
+	}
+
+	// 1. Check disk capacity via Statfs
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(rootDir, &stat); err == nil {
+		status.Active = true
+		status.TotalBytes = stat.Blocks * uint64(stat.Bsize)
+		status.FreeBytes = stat.Bavail * uint64(stat.Bsize)
+		status.UsedBytes = status.TotalBytes - status.FreeBytes
+		if status.TotalBytes > 0 {
+			status.UsedPercent = math.Round((float64(status.UsedBytes)/float64(status.TotalBytes)*100)*10) / 10
+		}
+	}
+
+	// Check if USB Gadget ConfigFS is active
+	if _, err := os.Stat("/sys/kernel/config/usb_gadget/teslacam"); err == nil {
+		status.Supported = true
+		status.Active = true
+	}
+
+	// Read external disk model if available
+	if modelBytes, err := os.ReadFile("/sys/block/sda/device/model"); err == nil {
+		status.DriveModel = strings.TrimSpace(string(modelBytes))
+	} else {
+		status.DriveModel = "TeslaCam USB Storage"
+	}
+
+	// Count events
+	countDir := func(sub string) int {
+		p := filepath.Join(rootDir, sub)
+		entries, err := os.ReadDir(p)
+		if err != nil {
+			return 0
+		}
+		c := 0
+		for _, e := range entries {
+			if e.IsDir() || strings.HasSuffix(strings.ToLower(e.Name()), ".mp4") {
+				c++
+			}
+		}
+		return c
+	}
+
+	status.SentryCount = countDir("SentryClips")
+	status.SavedCount = countDir("SavedClips")
+	status.RecentCount = countDir("RecentClips")
+	status.TotalEvents = status.SentryCount + status.SavedCount + status.RecentCount
+
+	_ = json.NewEncoder(w).Encode(status)
+}
+
+func handleTeslaCamEvents(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	rootDir := getTeslaCamRootDir()
+
+	category := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("category")))
+	if category == "" {
+		category = "all"
+	}
+
+	categoriesToScan := []string{}
+	switch category {
+	case "sentry":
+		categoriesToScan = append(categoriesToScan, "SentryClips")
+	case "saved":
+		categoriesToScan = append(categoriesToScan, "SavedClips")
+	case "recent":
+		categoriesToScan = append(categoriesToScan, "RecentClips")
+	default:
+		categoriesToScan = append(categoriesToScan, "SentryClips", "SavedClips", "RecentClips")
+	}
+
+	var events []TeslaCamEvent
+
+	for _, catName := range categoriesToScan {
+		catDir := filepath.Join(rootDir, catName)
+		entries, err := os.ReadDir(catDir)
+		if err != nil {
+			continue
+		}
+
+		// Handle directory-based events (SentryClips / SavedClips)
+		for _, entry := range entries {
+			ePath := filepath.Join(catDir, entry.Name())
+			if entry.IsDir() {
+				// Each folder is an event
+				files, err := os.ReadDir(ePath)
+				if err != nil {
+					continue
+				}
+
+				ev := TeslaCamEvent{
+					ID:        entry.Name(),
+					Category:  strings.ToLower(strings.TrimSuffix(catName, "Clips")),
+					Timestamp: entry.Name(),
+					Clips:     []TeslaCamClip{},
+				}
+				ev.Reason, ev.City = parseEventReason(ePath)
+
+				for _, f := range files {
+					if f.IsDir() {
+						continue
+					}
+					fName := f.Name()
+					lower := strings.ToLower(fName)
+					if strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".png") {
+						ev.ThumbPath = filepath.Join(catName, entry.Name(), fName)
+					}
+					if !strings.HasSuffix(lower, ".mp4") {
+						continue
+					}
+
+					fi, _ := f.Info()
+					fSize := int64(0)
+					modTime := int64(0)
+					if fi != nil {
+						fSize = fi.Size()
+						modTime = fi.ModTime().Unix()
+					}
+					ev.TotalSize += fSize
+
+					cam := "front"
+					if strings.Contains(lower, "back") || strings.Contains(lower, "rear") {
+						cam = "back"
+						ev.HasBack = true
+					} else if strings.Contains(lower, "left_repeater") || strings.Contains(lower, "left") {
+						cam = "left"
+						ev.HasLeft = true
+					} else if strings.Contains(lower, "right_repeater") || strings.Contains(lower, "right") {
+						cam = "right"
+						ev.HasRight = true
+					} else {
+						ev.HasFront = true
+					}
+
+					ev.Clips = append(ev.Clips, TeslaCamClip{
+						Camera:   cam,
+						FileName: fName,
+						FilePath: filepath.Join(catName, entry.Name(), fName),
+						FileSize: fSize,
+						ModTime:  modTime,
+					})
+				}
+
+				if len(ev.Clips) > 0 {
+					events = append(events, ev)
+				}
+			} else if strings.HasSuffix(strings.ToLower(entry.Name()), ".mp4") {
+				// Flat files inside RecentClips: group by timestamp prefix
+				fName := entry.Name()
+				lower := strings.ToLower(fName)
+				// Format: 2026-10-18_14-25-00-front.mp4
+				prefix := fName
+				if idx := strings.LastIndex(fName, "-"); idx > 0 {
+					prefix = fName[:idx]
+				}
+
+				// Find existing or create new
+				var targetEv *TeslaCamEvent
+				for i := range events {
+					if events[i].ID == prefix && events[i].Category == "recent" {
+						targetEv = &events[i]
+						break
+					}
+				}
+				if targetEv == nil {
+					events = append(events, TeslaCamEvent{
+						ID:        prefix,
+						Category:  "recent",
+						Timestamp: prefix,
+						Clips:     []TeslaCamClip{},
+					})
+					targetEv = &events[len(events)-1]
+				}
+
+				fi, _ := entry.Info()
+				fSize := int64(0)
+				modTime := int64(0)
+				if fi != nil {
+					fSize = fi.Size()
+					modTime = fi.ModTime().Unix()
+				}
+				targetEv.TotalSize += fSize
+
+				cam := "front"
+				if strings.Contains(lower, "back") || strings.Contains(lower, "rear") {
+					cam = "back"
+					targetEv.HasBack = true
+				} else if strings.Contains(lower, "left_repeater") || strings.Contains(lower, "left") {
+					cam = "left"
+					targetEv.HasLeft = true
+				} else if strings.Contains(lower, "right_repeater") || strings.Contains(lower, "right") {
+					cam = "right"
+					targetEv.HasRight = true
+				} else {
+					targetEv.HasFront = true
+				}
+
+				targetEv.Clips = append(targetEv.Clips, TeslaCamClip{
+					Camera:   cam,
+					FileName: fName,
+					FilePath: filepath.Join(catName, fName),
+					FileSize: fSize,
+					ModTime:  modTime,
+				})
+			}
+		}
+	}
+
+	// Sort events descending by ID / timestamp (newest first)
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].ID > events[j].ID
+	})
+
+	// Limit to max 100 for fast network transfer
+	if len(events) > 100 {
+		events = events[:100]
+	}
+
+	_ = json.NewEncoder(w).Encode(events)
+}
+
+func handleTeslaCamStream(w http.ResponseWriter, r *http.Request) {
+	rootDir := getTeslaCamRootDir()
+	relPath := r.URL.Query().Get("file")
+	if relPath == "" {
+		http.Error(w, "Missing file parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Security: Clean and ensure file is strictly within rootDir
+	cleanRel := filepath.Clean(relPath)
+	if strings.Contains(cleanRel, "..") {
+		http.Error(w, "Access Denied: Path Traversal", http.StatusForbidden)
+		return
+	}
+
+	fullPath := filepath.Join(rootDir, cleanRel)
+	fi, err := os.Stat(fullPath)
+	if err != nil || fi.IsDir() {
+		http.Error(w, "File Not Found", http.StatusNotFound)
+		return
+	}
+
+	if r.URL.Query().Get("download") == "1" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", sanitizeTeslaFileName(filepath.Base(fullPath))))
+	}
+
+	// Stream with native Range support
+	http.ServeFile(w, r, fullPath)
+}
+
+func handleTeslaCamDownloadZip(w http.ResponseWriter, r *http.Request) {
+	rootDir := getTeslaCamRootDir()
+	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	eventID := strings.TrimSpace(r.URL.Query().Get("event"))
+
+	if eventID == "" {
+		http.Error(w, "Missing event parameter", http.StatusBadRequest)
+		return
+	}
+
+	catFolder := "SentryClips"
+	if strings.EqualFold(category, "saved") {
+		catFolder = "SavedClips"
+	} else if strings.EqualFold(category, "recent") {
+		catFolder = "RecentClips"
+	}
+
+	eventDir := filepath.Join(rootDir, catFolder, eventID)
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"TeslaCam_%s_%s.zip\"", catFolder, sanitizeTeslaFileName(eventID)))
+	w.Header().Set("Cache-Control", "no-cache")
+
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	// Check if it's a directory
+	if fi, err := os.Stat(eventDir); err == nil && fi.IsDir() {
+		entries, err := os.ReadDir(eventDir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				filePath := filepath.Join(eventDir, entry.Name())
+				f, err := os.Open(filePath)
+				if err != nil {
+					continue
+				}
+				info, err := entry.Info()
+				if err == nil {
+					hdr, _ := zip.FileInfoHeader(info)
+					hdr.Name = filepath.Join(eventID, entry.Name())
+					hdr.Method = zip.Store // Fast streaming without CPU compression
+					if wFile, err := zw.CreateHeader(hdr); err == nil {
+						_, _ = io.Copy(wFile, f)
+					}
+				}
+				f.Close()
+			}
+		}
+	} else {
+		// Recent flat files with prefix match
+		recentDir := filepath.Join(rootDir, "RecentClips")
+		entries, err := os.ReadDir(recentDir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				if strings.HasPrefix(entry.Name(), eventID) {
+					filePath := filepath.Join(recentDir, entry.Name())
+					f, err := os.Open(filePath)
+					if err != nil {
+						continue
+					}
+					info, err := entry.Info()
+					if err == nil {
+						hdr, _ := zip.FileInfoHeader(info)
+						hdr.Name = filepath.Join(eventID, entry.Name())
+						hdr.Method = zip.Store
+						if wFile, err := zw.CreateHeader(hdr); err == nil {
+							_, _ = io.Copy(wFile, f)
+						}
+					}
+					f.Close()
+				}
+			}
+		}
+	}
+}
+
+func handleTeslaCamRefresh(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	rootDir := getTeslaCamRootDir()
+
+	// Trigger kernel pagecache sync and remount ro to fetch newest Tesla writes
+	_ = exec.Command("sync").Run()
+	_ = exec.Command("mount", "-o", "remount,ro", rootDir).Run()
+
+	resp := map[string]interface{}{
+		"success": true,
+		"message": "TeslaCam 存储缓存已同步刷新",
+		"time":    time.Now().Format("2006-01-02 15:04:05"),
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}

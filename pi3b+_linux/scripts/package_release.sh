@@ -246,6 +246,10 @@ echo "[*] 启动服务与守护进程..."
 systemctl enable diplay-hotspot 2>/dev/null || true
 systemctl restart diplay-hotspot 2>/dev/null || true
 
+# 启动 TeslaCam USB 存储模拟服务 (特斯拉手套箱行车记录与哨兵影像)
+systemctl enable diplay-teslacam 2>/dev/null || true
+systemctl restart diplay-teslacam 2>/dev/null || true
+
 systemctl enable diplay-pi
 if [ "$DIPLAY_WEB_UPGRADE" = "1" ]; then
     echo "[*] Web OTA 在线升级模式：跳过同步重启 diplay-pi (将在升级日志输出完毕后由后台平滑重启)..."

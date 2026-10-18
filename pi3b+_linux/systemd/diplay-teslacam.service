@@ -1,0 +1,15 @@
+[Unit]
+Description=DiPlay TeslaCam USB Mass Storage Gadget & Safe Sync
+After=local-fs.target
+Wants=local-fs.target
+Before=diplay-pi.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/diplay/scripts/setup_teslacam_gadget.sh start
+ExecStop=/opt/diplay/scripts/setup_teslacam_gadget.sh stop
+ExecReload=/opt/diplay/scripts/setup_teslacam_gadget.sh refresh
+
+[Install]
+WantedBy=multi-user.target
