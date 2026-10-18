@@ -488,6 +488,8 @@ func main() {
 	mux.HandleFunc("/api/terminal/logs", handleTerminalLogs)
 	mux.HandleFunc("/api/terminal/export", handleTerminalExport)
 	mux.HandleFunc("/api/terminal/download", handleTerminalDownload)
+	mux.HandleFunc("/api/video_log/save", handleVideoLogSave)
+	mux.HandleFunc("/api/video_log/latest.txt", handleVideoLogLatest)
 	mux.HandleFunc("/api/system/upgrade", handleSystemUpgrade)
 	mux.HandleFunc("/api/teslacam/status", handleTeslaCamStatus)
 	mux.HandleFunc("/api/teslacam/events", handleTeslaCamEvents)
@@ -1610,6 +1612,45 @@ func handleTerminalDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.Write(data)
+}
+
+var (
+	latestVideoLogMu sync.Mutex
+	latestVideoLog   []byte
+)
+
+func handleVideoLogSave(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"Method Not Allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, `{"error":"Failed to read body"}`, http.StatusBadRequest)
+		return
+	}
+	latestVideoLogMu.Lock()
+	latestVideoLog = body
+	latestVideoLogMu.Unlock()
+
+	w.Write([]byte(`{"ok":true}`))
+}
+
+func handleVideoLogLatest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	latestVideoLogMu.Lock()
+	data := append([]byte(nil), latestVideoLog...)
+	latestVideoLogMu.Unlock()
+
+	if len(data) == 0 {
+		w.Write([]byte("暂无已同步的车载视频播放诊断日志。\n请在特斯拉车机网页点击【📺 播放日志】->【☁️ 在手机/电脑查看】即可在此页面直接刷新查看并复制完整日志！"))
+		return
+	}
 	w.Write(data)
 }
 
