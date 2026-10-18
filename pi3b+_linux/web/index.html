@@ -2485,7 +2485,7 @@
     const numFps = (fps !== undefined) ? fps : 0;
     tagFpsLatency.textContent = `${numFps} FPS`;
     tagFpsLatency.style.color = numFps > 0 ? '#34d399' : 'var(--text-secondary)';
-    tagFpsLatencyEl.title = `实时画面渲染帧率: ${numFps} FPS${note ? ' (' + note + ')' : ''}`;
+    tagFpsLatency.title = `实时画面渲染帧率: ${numFps} FPS${note ? ' (' + note + ')' : ''}`;
   }
 
   function updateStatusUi(data) {
@@ -3049,10 +3049,11 @@
   let lastKeyframeRequestTime = 0;
   let lastVideoTimestamp = 0;
   let lastWebCodecsFrameTime = 0;
+  let lastQueueWarnTime = 0;
 
   function sendRemoteLog(msg) {
     console.log(msg);
-    if (ws && wsConnected) {
+    if (ws && wsConnected && ws.readyState === WebSocket.OPEN) {
       try {
         ws.send(JSON.stringify({ type: 'log', msg: msg }));
       } catch (_) {}
@@ -3155,12 +3156,15 @@
           }
           frame.close();
 
-          if (videoDecoder && videoDecoder.decodeQueueSize > 5) {
-            sendRemoteLog('[WebCodecs] ⚠️ 浏览器解码队列滞后: ' + videoDecoder.decodeQueueSize + ' 帧 (车机 GPU/渲染滞后)');
-          }
-
           videoFrameCounter++;
           const now = performance.now();
+          if (videoDecoder && videoDecoder.decodeQueueSize > 6) {
+            if (now - lastQueueWarnTime > 3000) {
+              lastQueueWarnTime = now;
+              sendRemoteLog('[WebCodecs] ⚠️ 浏览器解码队列滞后: ' + videoDecoder.decodeQueueSize + ' 帧 (车机 GPU/渲染滞后)');
+            }
+          }
+
           if (now - videoFpsInterval >= 1000) {
             currentVideoFps = Math.round((videoFrameCounter * 1000) / (now - videoFpsInterval));
             videoFrameCounter = 0;
@@ -3178,7 +3182,7 @@
           const now = Date.now();
           if (now - lastKeyframeRequestTime > 1000) {
             lastKeyframeRequestTime = now;
-            if (ws && wsConnected) {
+            if (ws && wsConnected && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: 'requestKeyFrame' }));
             }
           }
@@ -3228,7 +3232,7 @@
             const now = Date.now();
             if (now - lastKeyframeRequestTime > 1000) {
               lastKeyframeRequestTime = now;
-              if (ws && wsConnected) {
+              if (ws && wsConnected && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'requestKeyFrame' }));
               }
               sendRemoteLog('[WebCodecs] ⚠️ 正在等待关键帧 (IDR) 恢复画面解码 (丢弃参考帧丢失的增量帧)...');
@@ -3237,6 +3241,25 @@
           }
           hasReceivedKeyframe = true;
           sendRemoteLog('[WebCodecs] 关键帧 (IDR) 已到达，恢复硬件解码输出！');
+        }
+
+        // Backpressure shedding: If decodeQueueSize is piling up, drop non-keyframes to allow queue to drain!
+        if (videoDecoder.decodeQueueSize > 10 && !isKey) {
+          return;
+        }
+
+        // Severe backlog (> 25 frames): Reset decoder and demand fresh IDR keyframe immediately
+        if (videoDecoder.decodeQueueSize > 25) {
+          try { videoDecoder.reset(); } catch (_) {}
+          decoderConfigured = false;
+          hasReceivedKeyframe = false;
+          if (cachedDescription) {
+            initWebCodecsDecoder(cachedCodecStr, cachedDescription);
+          }
+          if (ws && wsConnected && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'requestKeyFrame' }));
+          }
+          return;
         }
 
         try {
@@ -6434,7 +6457,10 @@
   let stallDetectionCount = 0;
 
   setInterval(() => {
-    if (currentStreamMode === 'hardware' || currentStreamMode === 'video_mse') {
+    const isStreaming = performance.now() - lastVideoPacketTime < 1500;
+    const framesReceived = hudTotalRxFrames;
+
+    if (currentStreamMode === 'video_mse') {
       const vTag = document.getElementById('carplayVideoTag');
       if (!vTag) return;
 
@@ -6444,17 +6470,14 @@
       }
 
       // 2. Check for freeze: frames arriving over WebSocket but video not advancing
-      const framesReceived = hudTotalRxFrames;
-      const isStreaming = performance.now() - lastVideoPacketTime < 1500;
-
       if (isStreaming && framesReceived > lastWatchdogFrameCount + 10) {
         if (vTag.readyState < 2 || vTag.seeking) {
           stallDetectionCount++;
           if (stallDetectionCount >= 2) { // Stalled for > 1.6 seconds
             if (typeof sendRemoteLog === 'function') {
-              sendRemoteLog('[Watchdog] ⚠️ 检测到解码管线停滞 (readyState=' + vTag.readyState + ')，正在自愈并请求实时关键帧...');
+              sendRemoteLog('[Watchdog] ⚠️ 检测到 MSE 解码管线停滞 (readyState=' + vTag.readyState + ')，正在自愈并请求实时关键帧...');
             }
-            if (ws && wsConnected) {
+            if (ws && wsConnected && ws.readyState === WebSocket.OPEN) {
               try { ws.send(JSON.stringify({ type: 'requestKeyFrame' })); } catch (_) {}
             }
             stallDetectionCount = 0;
@@ -6463,9 +6486,32 @@
           stallDetectionCount = 0;
         }
       }
-      lastWatchdogFrameCount = framesReceived;
+    } else {
+      // Hardware WebCodecs or Canvas Mirror mode: Video tag is NOT used!
+      // Check if frames are arriving over WebSocket but NOT being decoded/rendered to Canvas
+      if (isStreaming && framesReceived > lastWatchdogFrameCount + 15) {
+        const timeSinceLastRender = performance.now() - lastWebCodecsFrameTime;
+        if (lastWebCodecsFrameTime > 0 && timeSinceLastRender > 2500) {
+          stallDetectionCount++;
+          if (stallDetectionCount >= 2) {
+            if (typeof sendRemoteLog === 'function') {
+              sendRemoteLog('[Watchdog] ⚠️ 检测到硬件解码渲染停滞 (' + Math.round(timeSinceLastRender) + 'ms 无新帧输出)，正在重置解码器并索要关键帧...');
+            }
+            if (typeof resetVideoPipeline === 'function') {
+              resetVideoPipeline('watchdog_stall');
+            }
+            if (ws && wsConnected && ws.readyState === WebSocket.OPEN) {
+              try { ws.send(JSON.stringify({ type: 'requestKeyFrame' })); } catch (_) {}
+            }
+            stallDetectionCount = 0;
+          }
+        } else {
+          stallDetectionCount = 0;
+        }
+      }
     }
-  }, 800);
+    lastWatchdogFrameCount = framesReceived;
+  }, 1000);
 
   // ====================================================
   // Automatic Modal State Observer: Keeps viewportCanvas completely isolated
