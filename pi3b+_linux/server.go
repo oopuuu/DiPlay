@@ -166,7 +166,7 @@ type Hub struct {
 	// Video Caching
 	lastCodecData []byte
 	annexBConfig  []byte
-	lastFrame     []byte
+	lastKeyFrame  []byte
 	lastJpegFrame []byte
 
 	// Stats
@@ -1850,10 +1850,10 @@ func handleWs(w http.ResponseWriter, r *http.Request) {
 		_ = client.SendMultiplex(0x01, 0, codecData)
 	}
 	hub.mu.RLock()
-	lastInitFrame := hub.lastFrame
+	lastInitKey := hub.lastKeyFrame
 	hub.mu.RUnlock()
-	if len(lastInitFrame) > 0 {
-		_ = client.SendMultiplex(0x02, 1, lastInitFrame)
+	if len(lastInitKey) > 0 {
+		_ = client.SendMultiplex(0x02, 1, lastInitKey)
 	}
 
 	// 3. Client connected. Cached SPS/PPS pushed.
@@ -1928,15 +1928,18 @@ func handleWs(w http.ResponseWriter, r *http.Request) {
 						go ctrlBridge.Send(string(payload))
 					}
 				case "requestKeyFrame":
+					if ctrlBridge != nil {
+						go ctrlBridge.Send(`{"type":"keyframe"}`)
+					}
 					hub.mu.RLock()
 					codec := hub.lastCodecData
-					lastF := hub.lastFrame
+					lastK := hub.lastKeyFrame
 					hub.mu.RUnlock()
 					if len(codec) > 0 {
 						_ = client.SendMultiplex(0x01, 0, codec)
 					}
-					if len(lastF) > 0 {
-						_ = client.SendMultiplex(0x02, 1, lastF)
+					if len(lastK) > 0 {
+						_ = client.SendMultiplex(0x02, 1, lastK)
 					}
 				}
 			}
@@ -2021,9 +2024,11 @@ func (h *Hub) runBroadcaster() {
 				}
 			}
 
-			h.mu.Lock()
-			h.lastFrame = frame
-			h.mu.Unlock()
+			if isKey {
+				h.mu.Lock()
+				h.lastKeyFrame = frame
+				h.mu.Unlock()
+			}
 
 			flag := byte(0)
 			if isKey {
