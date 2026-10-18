@@ -126,11 +126,42 @@ type WifiModePayload struct {
 	SSID string `json:"ssid,omitempty"`
 }
 
+// Thread-safe WebSocket Client wrapper with per-connection write mutex
+type WsClient struct {
+	conn        net.Conn
+	writeMu     sync.Mutex
+	timeoutErrs int
+	remoteAddr  string
+}
+
+func newWsClient(conn net.Conn) *WsClient {
+	return &WsClient{
+		conn:       conn,
+		remoteAddr: conn.RemoteAddr().String(),
+	}
+}
+
+func (c *WsClient) Close() error {
+	return c.conn.Close()
+}
+
+func (c *WsClient) SendFrame(opcode byte, payload []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return sendWsFrame(c.conn, opcode, payload)
+}
+
+func (c *WsClient) SendMultiplex(channel byte, flag byte, data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return sendMultiplexBinary(c.conn, channel, flag, data)
+}
+
 // Global streaming hub
 type Hub struct {
 	mu           sync.RWMutex
-	wsClients    map[net.Conn]bool
-	audioClients map[net.Conn]bool
+	wsClients    map[*WsClient]bool
+	audioClients map[*WsClient]bool
 
 	// Video Caching
 	lastCodecData []byte
@@ -245,8 +276,8 @@ func (c *ControlClient) SendBytes(data []byte) error {
 }
 
 var hub = &Hub{
-	wsClients:    make(map[net.Conn]bool),
-	audioClients: make(map[net.Conn]bool),
+	wsClients:    make(map[*WsClient]bool),
+	audioClients: make(map[*WsClient]bool),
 	width:        1920,
 	height:       1080,
 	frameChan:    make(chan []byte, 120),
@@ -375,7 +406,7 @@ func main() {
 			clientCount := len(hub.wsClients)
 			fps := atomic.LoadInt32(&hub.currentFps)
 			hasSession := hub.hasSession
-			clients := make([]net.Conn, 0, clientCount)
+			clients := make([]*WsClient, 0, clientCount)
 			for c := range hub.wsClients {
 				clients = append(clients, c)
 			}
@@ -390,7 +421,7 @@ func main() {
 					bitrate, fps, queueLen, droppedFrames,
 					hub.wlanBand, hub.wlanChan, hub.wlanTxMbps, hub.wlanRxMbps, hub.wlanDropPkts)
 				for _, c := range clients {
-					sendWsFrame(c, 0x01, []byte(hwJson))
+					_ = c.SendFrame(0x01, []byte(hwJson))
 				}
 			}
 
@@ -896,7 +927,7 @@ func handleTouch(w http.ResponseWriter, r *http.Request) {
 		"contacts": payload.Contacts,
 	})
 	if ctrlBridge != nil {
-		ctrlBridge.Send(string(data))
+		go ctrlBridge.Send(string(data))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"ok":true}`))
@@ -914,7 +945,7 @@ func handleAction(w http.ResponseWriter, r *http.Request) {
 		"action": payload.Action,
 	})
 	if ctrlBridge != nil {
-		ctrlBridge.Send(string(data))
+		go ctrlBridge.Send(string(data))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"ok":true}`))
@@ -1047,7 +1078,7 @@ func applyResolution(width, height int) {
 
 func broadcastWsText(msg string) {
 	hub.mu.RLock()
-	clients := make([]net.Conn, 0, len(hub.wsClients))
+	clients := make([]*WsClient, 0, len(hub.wsClients))
 	for c := range hub.wsClients {
 		clients = append(clients, c)
 	}
@@ -1055,7 +1086,7 @@ func broadcastWsText(msg string) {
 
 	data := []byte(msg)
 	for _, c := range clients {
-		_ = sendWsFrame(c, 0x01, data)
+		_ = c.SendFrame(0x01, data)
 	}
 }
 
@@ -1756,47 +1787,59 @@ func handleWs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	client := newWsClient(conn)
+
 	hub.mu.Lock()
-	hub.wsClients[conn] = true
+	hub.wsClients[client] = true
 	codecData := hub.lastCodecData
 	wWidth := hub.width
 	wHeight := hub.height
 	hub.mu.Unlock()
 
-	log.Printf("[WS] New client connected (%s). Total: %d", conn.RemoteAddr(), len(hub.wsClients))
+	log.Printf("[WS] New client connected (%s). Total: %d", client.remoteAddr, len(hub.wsClients))
 
 	// 1. Send initial hello status
 	hw := getHardwareStats()
 	initMsg := fmt.Sprintf(`{"type":"hello","active":true,"hasSession":true,"width":%d,"height":%d,"fps":60,"cpu":%.1f,"temp":%.1f,"memUsed":%d,"memTotal":%d}`,
 		wWidth, wHeight, hw.Cpu, hw.Temp, hw.MemUsedMB, hw.MemTotalMB)
-	sendWsFrame(conn, 0x01, []byte(initMsg))
+	_ = client.SendFrame(0x01, []byte(initMsg))
 
 	// 2. Instant Render: Push cached SPS/PPS codec configuration (avcC) and last keyframe
 	if len(codecData) > 0 {
-		sendMultiplexBinary(conn, 0x01, 0, codecData)
+		_ = client.SendMultiplex(0x01, 0, codecData)
 	}
 	hub.mu.RLock()
 	lastInitFrame := hub.lastFrame
 	hub.mu.RUnlock()
 	if len(lastInitFrame) > 0 {
-		sendMultiplexBinary(conn, 0x02, 1, lastInitFrame)
+		_ = client.SendMultiplex(0x02, 1, lastInitFrame)
 	}
 
-	// 3. Client connected. Cached SPS/PPS pushed. Never send disruptive keyframe commands to ctrlBridge.
+	// 3. Client connected. Cached SPS/PPS pushed.
 
 	// Read loop
 	buf := make([]byte, 4096)
 	for {
 		op, payload, err := readWsFrame(conn, buf)
 		if err != nil {
-			log.Printf("[WS] Client %s disconnected: %v. Remaining: %d", conn.RemoteAddr(), err, len(hub.wsClients)-1)
+			log.Printf("[WS] Client %s disconnected: %v. Remaining: %d", client.remoteAddr, err, len(hub.wsClients)-1)
+			break
+		}
+		if op == 0x09 { // Browser ping
+			_ = client.SendFrame(0x0A, payload) // Pong
+			continue
+		}
+		if op == 0x08 { // Browser close
+			_ = client.SendFrame(0x08, payload)
 			break
 		}
 		if len(payload) > 0 {
 			// Ultra low-latency binary touch protocol (opcode 0x02 or 'T' magic header)
 			if op == 0x02 || (len(payload) >= 2 && payload[0] == 0x54) {
 				if ctrlBridge != nil {
-					_ = ctrlBridge.SendBytes(payload)
+					go func(p []byte) {
+						_ = ctrlBridge.SendBytes(p)
+					}(payload)
 				}
 				continue
 			}
@@ -1806,13 +1849,13 @@ func handleWs(w http.ResponseWriter, r *http.Request) {
 				msgType, _ := m["type"].(string)
 				switch msgType {
 				case "ping":
-					sendWsFrame(conn, 0x01, []byte(`{"type":"pong"}`))
+					_ = client.SendFrame(0x01, []byte(`{"type":"pong"}`))
 				case "log":
-					log.Printf("[WebClient %s] %v", conn.RemoteAddr(), m["msg"])
+					log.Printf("[WebClient %s] %v", client.remoteAddr, m["msg"])
 				case "reconnect":
-					log.Printf("[WS] Client %s requested CarPlay reconnect/wake", conn.RemoteAddr())
+					log.Printf("[WS] Client %s requested CarPlay reconnect/wake", client.remoteAddr)
 					if ctrlBridge != nil {
-						ctrlBridge.Send(`{"type":"reconnect"}`)
+						go ctrlBridge.Send(`{"type":"reconnect"}`)
 					}
 				case "resolution":
 					var w, h int
@@ -1837,23 +1880,22 @@ func handleWs(w http.ResponseWriter, r *http.Request) {
 					}
 				case "touch":
 					if ctrlBridge != nil {
-						ctrlBridge.Send(string(payload))
+						go ctrlBridge.Send(string(payload))
 					}
 				case "action":
 					if ctrlBridge != nil {
-						ctrlBridge.Send(string(payload))
+						go ctrlBridge.Send(string(payload))
 					}
 				case "requestKeyFrame":
-					// Safely replay cached SPS/PPS configuration & latest keyframe immediately
 					hub.mu.RLock()
 					codec := hub.lastCodecData
 					lastF := hub.lastFrame
 					hub.mu.RUnlock()
 					if len(codec) > 0 {
-						sendMultiplexBinary(conn, 0x01, 0, codec)
+						_ = client.SendMultiplex(0x01, 0, codec)
 					}
 					if len(lastF) > 0 {
-						sendMultiplexBinary(conn, 0x02, 1, lastF)
+						_ = client.SendMultiplex(0x02, 1, lastF)
 					}
 				}
 			}
@@ -1861,10 +1903,10 @@ func handleWs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hub.mu.Lock()
-	delete(hub.wsClients, conn)
+	delete(hub.wsClients, client)
 	hub.mu.Unlock()
-	conn.Close()
-	log.Printf("[WS] Client disconnected. Remaining: %d", len(hub.wsClients))
+	client.Close()
+	log.Printf("[WS] Client %s disconnected. Remaining: %d", client.remoteAddr, len(hub.wsClients))
 }
 
 func handleAudioWs(w http.ResponseWriter, r *http.Request) {
@@ -1879,26 +1921,36 @@ func handleAudioWs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	client := newWsClient(conn)
+
 	hub.mu.Lock()
-	hub.audioClients[conn] = true
+	hub.audioClients[client] = true
 	hub.mu.Unlock()
 
-	log.Printf("[AudioWS] Dedicated audio client connected (%s)", conn.RemoteAddr())
-	sendWsFrame(conn, 0x01, []byte(`{"type":"audio_ready"}`))
+	log.Printf("[AudioWS] Dedicated audio client connected (%s)", client.remoteAddr)
+	_ = client.SendFrame(0x01, []byte(`{"type":"audio_ready"}`))
 
 	buf := make([]byte, 1024)
 	for {
-		_, _, err := readWsFrame(conn, buf)
+		op, payload, err := readWsFrame(conn, buf)
 		if err != nil {
+			break
+		}
+		if op == 0x09 {
+			_ = client.SendFrame(0x0A, payload)
+			continue
+		}
+		if op == 0x08 {
+			_ = client.SendFrame(0x08, payload)
 			break
 		}
 	}
 
 	hub.mu.Lock()
-	delete(hub.audioClients, conn)
+	delete(hub.audioClients, client)
 	hub.mu.Unlock()
-	conn.Close()
-	log.Printf("[AudioWS] Audio client disconnected")
+	client.Close()
+	log.Printf("[AudioWS] Audio client disconnected (%s)", client.remoteAddr)
 }
 
 // Broadcaster routine: fan-out video & audio to clients
@@ -1909,7 +1961,7 @@ func (h *Hub) runBroadcaster() {
 			isKey := isH264Keyframe(frame)
 			h.mu.RLock()
 			annexB := h.annexBConfig
-			clients := make([]net.Conn, 0, len(h.wsClients))
+			clients := make([]*WsClient, 0, len(h.wsClients))
 			for c := range h.wsClients {
 				clients = append(clients, c)
 			}
@@ -1940,17 +1992,28 @@ func (h *Hub) runBroadcaster() {
 			atomic.AddInt64(&h.fpsCounter, 1)
 
 			for _, c := range clients {
-				if err := sendMultiplexBinary(c, 0x02, flag, frame); err != nil {
+				if err := c.SendMultiplex(0x02, flag, frame); err != nil {
+					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+						atomic.AddInt64(&h.droppedFrames, 1)
+						c.timeoutErrs++
+						if c.timeoutErrs < 10 {
+							// Wi-Fi dynamic bitrate congestion: skip frame without dropping socket
+							continue
+						}
+					}
 					h.mu.Lock()
 					delete(h.wsClients, c)
 					h.mu.Unlock()
 					c.Close()
+					log.Printf("[WS] Client %s removed due to write failure: %v", c.remoteAddr, err)
+				} else {
+					c.timeoutErrs = 0
 				}
 			}
 
 		case pcm := <-h.audioChan:
 			h.mu.RLock()
-			audioClients := make([]net.Conn, 0, len(h.audioClients))
+			audioClients := make([]*WsClient, 0, len(h.audioClients))
 			for c := range h.audioClients {
 				audioClients = append(audioClients, c)
 			}
@@ -1958,7 +2021,7 @@ func (h *Hub) runBroadcaster() {
 
 			// Channel 0x00: 44.1kHz Stereo PCM (flag=0x00)
 			for _, c := range audioClients {
-				if err := sendMultiplexBinary(c, 0x00, 0x00, pcm); err != nil {
+				if err := c.SendMultiplex(0x00, 0x00, pcm); err != nil {
 					h.mu.Lock()
 					delete(h.audioClients, c)
 					h.mu.Unlock()
@@ -1989,7 +2052,7 @@ func sendWsFrame(conn net.Conn, opcode byte, payload []byte) error {
 	}
 
 	bufs := net.Buffers{header[:hLen], payload}
-	_ = conn.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
+	_ = conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
 	_, err := bufs.WriteTo(conn)
 	return err
 }
@@ -2018,9 +2081,9 @@ func sendMultiplexBinary(conn net.Conn, channel byte, flag byte, data []byte) er
 	header[hLen+3] = 0
 	hLen += 4
 
-	// Critical: Atomic write using net.Buffers with 250ms deadline. Eliminates stalling & memory backpressure!
+	// Atomic write using net.Buffers with 500ms deadline.
 	bufs := net.Buffers{header[:hLen], data}
-	_ = conn.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
+	_ = conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
 	_, err := bufs.WriteTo(conn)
 	return err
 }
@@ -2185,13 +2248,16 @@ func handleVideoIngest(conn net.Conn) {
 				hub.annexBConfig = annexB
 			}
 			hub.mu.Unlock()
-			log.Printf("[VideoFeed] Saved new SPS/PPS config (%d bytes avcC, %d bytes Annex-B). Forwarding to %d clients...", len(frame), len(annexB), len(hub.wsClients))
 			// Push immediately to all active WS clients
 			hub.mu.RLock()
+			spsClients := make([]*WsClient, 0, len(hub.wsClients))
 			for c := range hub.wsClients {
-				sendMultiplexBinary(c, 0x01, 0, frame)
+				spsClients = append(spsClients, c)
 			}
 			hub.mu.RUnlock()
+			for _, c := range spsClients {
+				_ = c.SendMultiplex(0x01, 0, frame)
+			}
 		} else {
 			atomic.AddInt64(&hub.bytesCounter, int64(len(frame)))
 			select {

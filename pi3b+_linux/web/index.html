@@ -79,7 +79,7 @@
     top: 12px;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 40;
+    z-index: 50;
     height: 38px;
     display: flex;
     align-items: center;
@@ -265,7 +265,7 @@
     bottom: 20px;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 40;
+    z-index: 50;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -630,20 +630,87 @@
   .overlay-empty {
     position: absolute;
     inset: 0;
-    background: rgba(7, 10, 16, 0.94);
+    background: rgba(10, 15, 26, 0.76);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 16px;
-    z-index: 10;
-    padding: 24px;
+    gap: 14px;
+    z-index: 35;
+    padding: 20px;
     text-align: center;
-    transition: opacity 0.3s;
+    transition: opacity 0.25s ease, transform 0.25s ease;
   }
   .overlay-empty.hidden {
     opacity: 0;
     pointer-events: none;
+    display: none !important;
+  }
+  .empty-card {
+    background: rgba(15, 23, 42, 0.94);
+    border: 1px solid rgba(56, 189, 248, 0.3);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 30px rgba(56, 189, 248, 0.12);
+    border-radius: 20px;
+    padding: 24px 28px;
+    max-width: 580px;
+    width: 94%;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    box-sizing: border-box;
+    animation: modalPopIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .empty-minimize-btn {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #94a3b8;
+    border-radius: 9999px;
+    padding: 4px 12px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .empty-minimize-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+  }
+  .empty-diag-box {
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 10px 14px;
+    margin: 12px 0 16px 0;
+    width: 100%;
+    box-sizing: border-box;
+    text-align: left;
+    font-size: 0.78rem;
+    line-height: 1.5;
+  }
+  .minimized-overlay-pill {
+    position: fixed;
+    top: 68px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 45;
+    background: rgba(15, 23, 42, 0.94);
+    border: 1px solid rgba(245, 158, 11, 0.5);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+    padding: 6px 16px;
+    border-radius: 9999px;
+    font-size: 0.8rem;
+    color: #fbbf24;
+    display: none;
+    align-items: center;
+    gap: 10px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
   }
   .spinner {
     width: 44px;
@@ -1111,23 +1178,54 @@
   <div id="touchFeedback0" class="touch-ripple ripple-0" style="display: none;"></div>
   <div id="touchFeedback1" class="touch-ripple ripple-1" style="display: none;"></div>
   <div id="emptyOverlay" class="overlay-empty">
-    <div class="spinner"></div>
-    <h3 style="font-size: 1.25rem; font-weight: 600;">正在加载 CarPlay 投屏...</h3>
-    <p style="color: var(--text-secondary); font-size: 0.9rem; max-width: 420px;">
-      请确认 iPhone 已连接车载 Wi-Fi。如果服务刚重启或未唤醒，可点击下方按钮一键后台蓝牙唤醒。
-    </p>
-    <div style="margin-top: 14px; display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;">
-      <button id="btnWakePhone" style="background: var(--accent); color: white; border: none; padding: 8px 18px; border-radius: 9999px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 14px rgba(59,130,246,0.4); display: flex; align-items: center; gap: 6px; transition: transform 0.15s ease;">
-        <span>📱 唤醒 iPhone 重连</span>
-      </button>
-      <button id="btnSoftReset" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); padding: 8px 18px; border-radius: 9999px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: transform 0.15s ease;" title="无需重启树莓派，从 0 深度复位蓝牙芯片与 AirPlay 协议栈">
-        <span>⚡ 0状态重启投屏</span>
-      </button>
-      <button id="btnEmptyVideoLog" style="background: rgba(16, 185, 129, 0.18); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.45); padding: 8px 18px; border-radius: 9999px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: transform 0.15s ease;" title="查看视频解码与播放实时诊断日志 (快捷键 D)"><span>📺 实时播放日志</span></button>
-      <button id="btnEmptyUpgrade" style="background: rgba(245, 158, 11, 0.18); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.45); padding: 8px 18px; border-radius: 9999px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: transform 0.15s ease;" title="网页直接上传完整程序包一键在线安装更新">
-        <span>📦 上传程序包更新</span>
-      </button>
+    <div class="empty-card">
+      <button id="btnEmptyMinimize" class="empty-minimize-btn" title="最小化遮罩以查看底层画面与实时日志">✕ 最小化遮罩</button>
+      <div class="spinner"></div>
+      <h3 id="emptyOverlayTitle" style="font-size: 1.2rem; font-weight: 700; color: #f8fafc; margin: 12px 0 6px 0;">正在加载 CarPlay 投屏...</h3>
+      <p id="emptyOverlaySub" style="color: var(--text-secondary); font-size: 0.85rem; max-width: 440px; margin: 0 0 10px 0; line-height: 1.4;">
+        请确认 iPhone 已连接车载 Wi-Fi。如果服务刚重启或未唤醒，可点击下方按钮一键后台蓝牙唤醒。
+      </p>
+
+      <!-- Real-time Diagnostic Telemetry Panel -->
+      <div class="empty-diag-box">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span style="color: #94a3b8; font-weight: 600;">📡 通信链路诊断:</span>
+          <span id="emptyWsDetail" style="color: #34d399; font-weight: 600;">WS 极速通道检测中</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span style="color: #94a3b8;">断开排查原因:</span>
+          <span id="emptyOverlayReason" style="color: #fbbf24; font-family: monospace;">正常运行或检测中</span>
+        </div>
+        <div style="border-top: 1px dashed rgba(255, 255, 255, 0.1); padding-top: 6px; margin-top: 6px; font-size: 0.74rem; color: #38bdf8;">
+          💡 <b>排查秘诀</b>: 若 iPhone 仍显示 CarPlay 已连接，表明 iPhone 与树莓派底层 AirPlay 仍保持稳定联通！网页端正在秒级快速自愈重连。您可点击右上角「最小化遮罩」直接观察底层画布或打开诊断日志。
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; width: 100%;">
+        <button id="btnEmptyVideoLog" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.45); padding: 8px 16px; border-radius: 9999px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: transform 0.15s ease;" title="查看视频解码与播放实时诊断日志 (快捷键 D)">
+          <span>📺 播放诊断日志 (D)</span>
+        </button>
+        <button id="btnEmptyReconnectWs" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.45); padding: 8px 16px; border-radius: 9999px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: transform 0.15s ease;" title="主动重新连接 WebSocket 投屏数据流">
+          <span>⚡ 立即重连投屏流</span>
+        </button>
+        <button id="btnWakePhone" style="background: var(--accent); color: white; border: none; padding: 8px 16px; border-radius: 9999px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 14px rgba(59,130,246,0.4); display: flex; align-items: center; gap: 6px; transition: transform 0.15s ease;">
+          <span>📱 唤醒 iPhone 重连</span>
+        </button>
+        <button id="btnSoftReset" style="background: rgba(245, 158, 11, 0.18); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.45); padding: 8px 16px; border-radius: 9999px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: transform 0.15s ease;" title="无需重启树莓派，从 0 深度复位蓝牙芯片与 AirPlay 协议栈">
+          <span>⚡ 0状态重启投屏</span>
+        </button>
+        <button id="btnEmptyUpgrade" style="background: rgba(255, 255, 255, 0.08); color: #cbd5e1; border: 1px solid rgba(255, 255, 255, 0.15); padding: 8px 16px; border-radius: 9999px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: transform 0.15s ease;" title="网页直接上传完整程序包一键在线安装更新">
+          <span>📦 上传更新</span>
+        </button>
+      </div>
     </div>
+  </div>
+
+  <!-- Minimized Floating Banner (Appears when overlay is minimized, completely non-blocking) -->
+  <div id="minimizedOverlayBanner" class="minimized-overlay-pill">
+    <span>⚠️ CarPlay 投屏流离线重连中</span>
+    <button id="btnRestoreOverlay" style="background: rgba(245, 158, 11, 0.25); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.5); border-radius: 9999px; padding: 3px 12px; font-size: 0.74rem; cursor: pointer; font-weight: 600;">展开诊断与唤醒</button>
+    <button id="btnMinimizedVideoLog" style="background: rgba(16, 185, 129, 0.25); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.5); border-radius: 9999px; padding: 3px 12px; font-size: 0.74rem; cursor: pointer; font-weight: 600;">📺 查看日志</button>
   </div>
 </div>
 
@@ -1854,6 +1952,64 @@
   let wsReconnectTimer = null;
   let audioPlayer = null;
 
+  let emptyOverlayUserMinimized = false;
+
+  function updateEmptyOverlayDiag(code, codeDesc, reason) {
+    const elCode = document.getElementById('emptyOverlayReason');
+    const elWs = document.getElementById('emptyWsDetail');
+    if (elCode) elCode.textContent = `${codeDesc || '已断开'} (${code || 1006})`;
+    if (elWs) {
+      elWs.textContent = wsConnected ? 'WS 极速通道已就绪' : '重连尝试中 (1.5s)...';
+      elWs.style.color = wsConnected ? '#34d399' : '#f87171';
+    }
+  }
+
+  function showEmptyOverlay(force, reason) {
+    if (emptyOverlayUserMinimized && !force) {
+      const banner = document.getElementById('minimizedOverlayBanner');
+      if (banner) banner.style.display = 'flex';
+      return;
+    }
+    // Never show empty overlay if video packets are actively arriving (< 3000ms)
+    if (typeof lastVideoPacketTime !== 'undefined' && (performance.now() - lastVideoPacketTime < 3000)) {
+      return;
+    }
+    const overlay = document.getElementById('emptyOverlay');
+    if (overlay) {
+      overlay.classList.remove('hidden');
+      const banner = document.getElementById('minimizedOverlayBanner');
+      if (banner) banner.style.display = 'none';
+      if (reason && document.getElementById('emptyOverlayReason')) {
+        document.getElementById('emptyOverlayReason').textContent = reason;
+      }
+    }
+  }
+
+  function hideEmptyOverlay() {
+    emptyOverlayUserMinimized = false;
+    const overlay = document.getElementById('emptyOverlay');
+    if (overlay) overlay.classList.add('hidden');
+    const banner = document.getElementById('minimizedOverlayBanner');
+    if (banner) banner.style.display = 'none';
+  }
+
+  function minimizeEmptyOverlay() {
+    emptyOverlayUserMinimized = true;
+    const overlay = document.getElementById('emptyOverlay');
+    if (overlay) overlay.classList.add('hidden');
+    const banner = document.getElementById('minimizedOverlayBanner');
+    if (banner) banner.style.display = 'flex';
+    if (typeof addHudLog === 'function') addHudLog('info', '已最小化加载遮罩，直接观察底层投屏画面与日志');
+  }
+
+  function restoreEmptyOverlay() {
+    emptyOverlayUserMinimized = false;
+    const overlay = document.getElementById('emptyOverlay');
+    if (overlay) overlay.classList.remove('hidden');
+    const banner = document.getElementById('minimizedOverlayBanner');
+    if (banner) banner.style.display = 'none';
+  }
+
   function initWebSocket() {
     if (ws) {
       try { ws.close(); } catch (_) {}
@@ -1869,6 +2025,10 @@
         tagNetwork.textContent = '⚡ WS 极速已连';
         tagNetwork.style.borderColor = 'rgba(16, 185, 129, 0.4)';
         tagNetwork.style.color = '#34d399';
+      }
+      updateEmptyOverlayDiag(1000, 'WS 正常连接', '通道已建立');
+      if (hasReceivedVideoFrame) {
+        hideEmptyOverlay();
       }
       if (typeof resetVideoPipeline === 'function') {
         resetVideoPipeline('ws_opened');
@@ -1968,16 +2128,36 @@
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       wsConnected = false;
-      if (typeof resetVideoPipeline === 'function') {
-        resetVideoPipeline('ws_closed');
-      }
+      const code = event ? event.code : 1006;
+      const reason = (event && event.reason) ? event.reason : '网络中断或服务端重置';
+      const codeDesc = {
+        1000: '正常关闭',
+        1001: '端点离开',
+        1002: '协议错误',
+        1006: '异常断开 (TCP重置/超时/空口拥塞)',
+        1011: '服务端内部错误'
+      }[code] || ('代码 ' + code);
+
+      const logMsg = `[WS-Close] 🔌 WebSocket 连接断开: ${codeDesc} (Code: ${code}, Reason: ${reason})`;
+      if (typeof addHudLog === 'function') addHudLog('warn', logMsg);
+      if (typeof sendRemoteLog === 'function') sendRemoteLog(logMsg);
+
       if (tagNetwork) {
         tagNetwork.textContent = '🔌 WS 重连中';
         tagNetwork.style.borderColor = 'rgba(239, 68, 68, 0.4)';
         tagNetwork.style.color = '#f87171';
       }
+
+      updateEmptyOverlayDiag(code, codeDesc, reason);
+
+      // Only show empty overlay if video has genuinely stopped arriving
+      const isVideoFlowing = typeof lastVideoPacketTime !== 'undefined' && (performance.now() - lastVideoPacketTime < 3000);
+      if (!isVideoFlowing && !hasReceivedVideoFrame) {
+        showEmptyOverlay(false, `WebSocket 断开 (${codeDesc})，等待自动重连...`);
+      }
+
       clearTimeout(wsReconnectTimer);
       wsReconnectTimer = setTimeout(initWebSocket, 1500);
     };
@@ -2160,10 +2340,13 @@
 
     if (data.active && data.hasSession) {
       updateStatusBadge();
-      emptyOverlay.classList.add('hidden');
+      hideEmptyOverlay();
     } else {
       updateStatusBadge();
-      if (!data.hasSession) emptyOverlay.classList.remove('hidden');
+      const isVideoFlowing = typeof lastVideoPacketTime !== 'undefined' && (performance.now() - lastVideoPacketTime < 3000);
+      if (!data.hasSession && !isVideoFlowing && !hasReceivedVideoFrame) {
+        showEmptyOverlay(false, '等待 iPhone 连接 CarPlay');
+      }
     }
 
     // Suggested resolution check without aggressive downscaling:
@@ -2187,10 +2370,11 @@
         updateStatusUi(data);
       }
     } catch (e) {
-      if (!wsConnected) {
+      const isVideoFlowing = typeof lastVideoPacketTime !== 'undefined' && (performance.now() - lastVideoPacketTime < 3000);
+      if (!wsConnected && !isVideoFlowing && !hasReceivedVideoFrame) {
         statusBadge.classList.add('idle');
         statusText.textContent = '离线断开';
-        emptyOverlay.classList.remove('hidden');
+        showEmptyOverlay(false, 'HTTP 与 WebSocket 均未连通');
       }
     }
   }
@@ -2198,11 +2382,9 @@
   pollStatus();
 
   screen.onload = () => {
-    if (!hasReceivedVideoFrame) {
-      emptyOverlay.classList.add('hidden');
-      statusBadge.classList.remove('idle');
-      statusText.textContent = 'CarPlay 运行中';
-    }
+    hideEmptyOverlay();
+    statusBadge.classList.remove('idle');
+    statusText.textContent = 'CarPlay 运行中';
   };
   screen.onerror = () => {
     setTimeout(() => { screen.src = '/stream?t=' + Date.now(); }, 2000);
@@ -2856,6 +3038,10 @@
   }
 
   function handleVideoChunk(naluBuffer, isKey) {
+    lastVideoPacketTime = performance.now();
+    hasReceivedVideoFrame = true;
+    hideEmptyOverlay();
+
     if (currentStreamMode !== 'video_mse') {
       if (hasWebCodecs) {
         if (!videoDecoder || !decoderConfigured || videoDecoder.state === 'closed') {
@@ -3016,7 +3202,7 @@
           if (videoCanvas) videoCanvas.style.display = 'block';
           const videoTag = document.getElementById('carplayVideoTag');
           if (videoTag) videoTag.style.display = 'none';
-          emptyOverlay.classList.add('hidden');
+          hideEmptyOverlay();
           statusBadge.classList.remove('idle');
           statusText.textContent = 'CarPlay 极速图片流';
         }
@@ -5534,8 +5720,22 @@
   bindTap(document.getElementById('btnVideoLogHud'), toggleVideoLogModal);
   bindTap(document.getElementById('btnDockVideoLog'), toggleVideoLogModal);
   bindTap(document.getElementById('btnEmptyVideoLog'), toggleVideoLogModal);
+  bindTap(document.getElementById('btnMinimizedVideoLog'), toggleVideoLogModal);
   bindTap(document.getElementById('btnHeaderTeslaCam'), toggleTeslaCamModal);
   bindTap(document.getElementById('btnDockTeslaCam'), toggleTeslaCamModal);
+  bindTap(document.getElementById('btnEmptyMinimize'), minimizeEmptyOverlay);
+  bindTap(document.getElementById('btnRestoreOverlay'), restoreEmptyOverlay);
+
+  const btnEmptyReconnectWs = document.getElementById('btnEmptyReconnectWs');
+  if (btnEmptyReconnectWs) {
+    bindTap(btnEmptyReconnectWs, () => {
+      btnEmptyReconnectWs.innerHTML = '<span>⚡ 正在重连...</span>';
+      initWebSocket();
+      setTimeout(() => {
+        btnEmptyReconnectWs.innerHTML = '<span>⚡ 立即重连投屏流</span>';
+      }, 1500);
+    });
+  }
   if (btnCloseVideoLog) btnCloseVideoLog.addEventListener('click', closeVideoLogModal);
   if (videoLogBackdrop) videoLogBackdrop.addEventListener('click', closeVideoLogModal);
   if (tagFpsLatency) {
