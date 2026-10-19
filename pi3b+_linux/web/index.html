@@ -519,6 +519,7 @@
     display: none !important;
   }
 
+  /* Draggable & Auto-collapsing Immersive Menu Trigger Pill */
   .immersive-trigger {
     position: fixed;
     top: 14px;
@@ -527,29 +528,73 @@
     display: none;
     align-items: center;
     gap: 6px;
-    background: rgba(14, 20, 34, 0.45);
+    background: rgba(14, 20, 34, 0.55);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
-    border: 1px solid rgba(255, 255, 255, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.16);
     border-radius: 9999px;
     padding: 6px 14px;
     font-size: 0.78rem;
     font-weight: 600;
-    color: rgba(255, 255, 255, 0.8);
-    cursor: pointer;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-    opacity: 0.4;
-    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    color: rgba(255, 255, 255, 0.85);
+    cursor: grab;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+    opacity: 0.55;
+    transition: opacity 0.25s ease, background 0.25s ease, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), padding 0.3s ease, border-radius 0.3s ease;
     user-select: none;
     -webkit-user-select: none;
+    touch-action: none;
   }
-  .immersive-trigger:hover {
+  .immersive-trigger:hover, .immersive-trigger:active {
     opacity: 1;
-    background: rgba(14, 20, 34, 0.92);
+    background: rgba(14, 20, 34, 0.95);
     color: #fff;
     border-color: var(--accent);
-    transform: scale(1.05);
-    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.45);
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.5);
+  }
+  .immersive-trigger.is-dragging {
+    cursor: grabbing !important;
+    opacity: 0.95 !important;
+    transform: scale(1.08) !important;
+    box-shadow: 0 8px 24px rgba(59, 130, 246, 0.6) !important;
+    transition: none !important;
+  }
+  /* Ultra-thin Auto-Docked Edge Capsule (shrinks into edge border so it never covers CarPlay app UI) */
+  .immersive-trigger.docked-edge {
+    padding: 5px 8px;
+    opacity: 0.22;
+    background: rgba(15, 23, 42, 0.45);
+    border-color: rgba(255, 255, 255, 0.1);
+    box-shadow: none;
+  }
+  .immersive-trigger.docked-edge:hover, .immersive-trigger.docked-edge:active {
+    padding: 6px 14px;
+    opacity: 1;
+    background: rgba(14, 20, 34, 0.95);
+    border-color: var(--accent);
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.5);
+  }
+  .immersive-trigger.docked-edge .trigger-text {
+    display: none;
+  }
+  .immersive-trigger.docked-edge:hover .trigger-text {
+    display: inline;
+  }
+
+  /* Screen Top Edge Invisible Hotspot: Tap or swipe the very top edge of the screen to restore */
+  .top-edge-hotspot {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 10px;
+    z-index: 89;
+    display: none;
+    cursor: pointer;
+    background: transparent;
+  }
+  body.immersive-mode .top-edge-hotspot {
+    display: block;
   }
 
   .global-toast {
@@ -1728,9 +1773,13 @@
   </div>
 </div>
 
-<!-- Immersive Mode Floating Restore Trigger -->
-<div id="immersiveRestoreTrigger" class="immersive-trigger" title="点击退出沉浸模式 / 唤出菜单控制栏 (或按键盘 H 键)">
-  <span>👁️ 唤出菜单</span>
+<!-- Top Edge Invisible Hotspot Trigger (Tap/Swipe top screen edge to restore dock) -->
+<div id="topEdgeHotspot" class="top-edge-hotspot" title="点击或轻扫顶部屏幕边缘唤出菜单"></div>
+
+<!-- Immersive Mode Floating Restore Trigger (Draggable, Auto-docking, Edge-snapping) -->
+<div id="immersiveRestoreTrigger" class="immersive-trigger" title="点击呼出菜单 / 按住拖拽到任意位置 / 双击换角 / 闲置自动贴边收起 (或按键盘 H 键)">
+  <span style="font-size: 0.95rem; line-height: 1;">👁️</span>
+  <span class="trigger-text">唤出菜单</span>
 </div>
 
 <!-- Global Floating Toast Notification -->
@@ -4834,8 +4883,23 @@
   }
 
   const immersiveTrigger = document.getElementById('immersiveRestoreTrigger');
+  const topEdgeHotspot = document.getElementById('topEdgeHotspot');
   const btnHeaderImmersive = document.getElementById('btnToggleImmersive');
   const btnDockImmersive = document.getElementById('btnDockImmersive');
+  let triggerIdleTimeout = null;
+
+  function resetTriggerIdleTimer() {
+    clearTimeout(triggerIdleTimeout);
+    if (!immersiveTrigger) return;
+    immersiveTrigger.classList.remove('idle-collapsed');
+    if (isImmersiveMode) {
+      triggerIdleTimeout = setTimeout(() => {
+        if (isImmersiveMode && immersiveTrigger && !isTriggerDragging) {
+          immersiveTrigger.classList.add('idle-collapsed');
+        }
+      }, 3500);
+    }
+  }
 
   function toggleImmersiveMode(forceState) {
     if (typeof forceState === 'boolean') {
@@ -4846,7 +4910,11 @@
 
     if (isImmersiveMode) {
       document.body.classList.add('immersive-mode');
-      if (immersiveTrigger) immersiveTrigger.style.display = 'flex';
+      if (immersiveTrigger) {
+        immersiveTrigger.style.display = 'flex';
+        resetTriggerIdleTimer();
+      }
+      if (topEdgeHotspot) topEdgeHotspot.style.display = 'block';
 
       // Close all open menus / popovers
       if (resPopover) resPopover.classList.remove('show');
@@ -4861,10 +4929,12 @@
       if (btnStreamMode) btnStreamMode.classList.remove('active-pop');
       if (aspectHint) aspectHint.style.display = 'none';
 
-      showToast('✨ 已进入沉浸模式！点击右上角【👁️ 唤出菜单】或按键盘 H 键可随时恢复', 3200);
+      showToast('✨ 已进入沉浸模式！点击边缘悬浮球【👁️】、轻扫屏幕顶端或按键盘 H 键可随时恢复', 3200);
     } else {
       document.body.classList.remove('immersive-mode');
       if (immersiveTrigger) immersiveTrigger.style.display = 'none';
+      if (topEdgeHotspot) topEdgeHotspot.style.display = 'none';
+      clearTimeout(triggerIdleTimeout);
       showToast('👁️ 已恢复菜单与操作面板', 1800);
     }
   }
@@ -5698,11 +5768,180 @@
     });
   }
 
-  if (immersiveTrigger) {
-    immersiveTrigger.addEventListener('click', (e) => {
+  let isTriggerDragging = false;
+  let triggerDragStartX = 0, triggerDragStartY = 0;
+  let triggerInitialLeft = 0, triggerInitialTop = 0;
+  let triggerMovedDist = 0;
+  let lastTriggerTapTime = 0;
+
+  function initImmersiveTriggerPosition() {
+    if (!immersiveTrigger) return;
+    const saved = localStorage.getItem('tesla_immersive_trigger_pos');
+    if (saved) {
+      try {
+        const { left, top } = JSON.parse(saved);
+        const winW = window.innerWidth;
+        const winH = window.innerHeight;
+        const safeLeft = Math.max(8, Math.min(winW - 70, left));
+        const safeTop = Math.max(8, Math.min(winH - 50, top));
+        immersiveTrigger.style.left = safeLeft + 'px';
+        immersiveTrigger.style.top = safeTop + 'px';
+        immersiveTrigger.style.right = 'auto';
+        immersiveTrigger.style.bottom = 'auto';
+        return;
+      } catch (e) {}
+    }
+    immersiveTrigger.style.top = '12px';
+    immersiveTrigger.style.right = '12px';
+    immersiveTrigger.style.left = 'auto';
+    immersiveTrigger.style.bottom = 'auto';
+  }
+
+  function cycleTriggerCorner() {
+    if (!immersiveTrigger) return;
+    const winW = window.innerWidth;
+    const winH = window.innerHeight;
+    const trigW = 100;
+    const trigH = 40;
+    const rect = immersiveTrigger.getBoundingClientRect();
+
+    let targetLeft, targetTop;
+    const isRight = rect.left > winW / 2;
+    const isBottom = rect.top > winH / 2;
+
+    if (isRight && !isBottom) {
+      targetLeft = winW - trigW - 16;
+      targetTop = winH - trigH - 32;
+    } else if (isRight && isBottom) {
+      targetLeft = 16;
+      targetTop = winH - trigH - 32;
+    } else if (!isRight && isBottom) {
+      targetLeft = 16;
+      targetTop = 16;
+    } else {
+      targetLeft = winW - trigW - 16;
+      targetTop = 16;
+    }
+
+    immersiveTrigger.style.transition = 'all 0.35s cubic-bezier(0.16, 1, 0.3, 1)';
+    immersiveTrigger.style.left = targetLeft + 'px';
+    immersiveTrigger.style.top = targetTop + 'px';
+    try {
+      localStorage.setItem('tesla_immersive_trigger_pos', JSON.stringify({ left: targetLeft, top: targetTop }));
+    } catch (_) {}
+    showToast('🔄 悬浮球已换角定位', 1200);
+    resetTriggerIdleTimer();
+  }
+
+  if (topEdgeHotspot) {
+    topEdgeHotspot.addEventListener('click', (e) => {
       e.stopPropagation();
+      e.preventDefault();
       toggleImmersiveMode(false);
     });
+    topEdgeHotspot.addEventListener('touchend', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      toggleImmersiveMode(false);
+    }, { passive: false });
+  }
+
+  if (immersiveTrigger) {
+    initImmersiveTriggerPosition();
+
+    immersiveTrigger.addEventListener('pointerenter', () => resetTriggerIdleTimer());
+
+    immersiveTrigger.addEventListener('pointerdown', (e) => {
+      isTriggerDragging = true;
+      triggerMovedDist = 0;
+      triggerDragStartX = e.clientX;
+      triggerDragStartY = e.clientY;
+
+      const rect = immersiveTrigger.getBoundingClientRect();
+      triggerInitialLeft = rect.left;
+      triggerInitialTop = rect.top;
+
+      immersiveTrigger.style.transition = 'none';
+      immersiveTrigger.style.right = 'auto';
+      immersiveTrigger.style.bottom = 'auto';
+      immersiveTrigger.style.left = triggerInitialLeft + 'px';
+      immersiveTrigger.style.top = triggerInitialTop + 'px';
+      immersiveTrigger.classList.remove('idle-collapsed');
+      clearTimeout(triggerIdleTimeout);
+
+      if (immersiveTrigger.setPointerCapture) {
+        try { immersiveTrigger.setPointerCapture(e.pointerId); } catch (_) {}
+      }
+      e.stopPropagation();
+    });
+
+    window.addEventListener('pointermove', (e) => {
+      if (!isTriggerDragging || !immersiveTrigger) return;
+      const dx = e.clientX - triggerDragStartX;
+      const dy = e.clientY - triggerDragStartY;
+      triggerMovedDist = Math.hypot(dx, dy);
+
+      const winW = window.innerWidth;
+      const winH = window.innerHeight;
+      const trigW = immersiveTrigger.offsetWidth || 50;
+      const trigH = immersiveTrigger.offsetHeight || 40;
+
+      let newLeft = triggerInitialLeft + dx;
+      let newTop = triggerInitialTop + dy;
+
+      newLeft = Math.max(6, Math.min(winW - trigW - 6, newLeft));
+      newTop = Math.max(6, Math.min(winH - trigH - 6, newTop));
+
+      immersiveTrigger.style.left = newLeft + 'px';
+      immersiveTrigger.style.top = newTop + 'px';
+    });
+
+    const finishTriggerDrag = (e) => {
+      if (!isTriggerDragging || !immersiveTrigger) return;
+      isTriggerDragging = false;
+      immersiveTrigger.style.transition = 'all 0.35s cubic-bezier(0.16, 1, 0.3, 1)';
+
+      const rect = immersiveTrigger.getBoundingClientRect();
+      const winW = window.innerWidth;
+      const winH = window.innerHeight;
+      const trigW = rect.width;
+      const trigH = rect.height;
+
+      if (triggerMovedDist > 6) {
+        const midX = rect.left + trigW / 2;
+        let snapLeft;
+        if (midX < winW / 2) {
+          snapLeft = 12;
+        } else {
+          snapLeft = winW - trigW - 12;
+        }
+        let snapTop = Math.max(12, Math.min(winH - trigH - 12, rect.top));
+
+        immersiveTrigger.style.left = snapLeft + 'px';
+        immersiveTrigger.style.top = snapTop + 'px';
+
+        try {
+          localStorage.setItem('tesla_immersive_trigger_pos', JSON.stringify({ left: snapLeft, top: snapTop }));
+        } catch (_) {}
+        resetTriggerIdleTimer();
+      } else {
+        const now = Date.now();
+        if (now - lastTriggerTapTime < 320) {
+          cycleTriggerCorner();
+          lastTriggerTapTime = 0;
+        } else {
+          lastTriggerTapTime = now;
+          toggleImmersiveMode(false);
+        }
+      }
+
+      if (e && e.pointerId && immersiveTrigger.releasePointerCapture) {
+        try { immersiveTrigger.releasePointerCapture(e.pointerId); } catch (_) {}
+      }
+    };
+
+    window.addEventListener('pointerup', finishTriggerDrag);
+    window.addEventListener('pointercancel', finishTriggerDrag);
   }
 
   // Keyboard shortcut: H / M / Escape to toggle

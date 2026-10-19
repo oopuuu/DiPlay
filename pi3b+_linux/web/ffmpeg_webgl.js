@@ -1,5 +1,7 @@
-function Texture(gl) {
+function Texture(gl, isWebGL2) {
     this.gl = gl;
+    this.isWebGL2 = !!isWebGL2;
+    this.unit = 0;
     this.texture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
 
@@ -13,21 +15,25 @@ function Texture(gl) {
 }
 
 Texture.prototype.bind = function (n, program, name) {
+    this.unit = n;
     var gl = this.gl;
-    gl.activeTexture([gl.TEXTURE0, gl.TEXTURE1, gl.TEXTURE2][n]);
+    gl.activeTexture(gl.TEXTURE0 + n);
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
     gl.uniform1i(gl.getUniformLocation(program, name), n);
 };
 
 Texture.prototype.fill = function (width, height, data) {
     var gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0 + this.unit);
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    var internalFormat = this.isWebGL2 ? gl.R8 : gl.LUMINANCE;
+    var format = this.isWebGL2 ? gl.RED : gl.LUMINANCE;
     if (this.width !== width || this.height !== height) {
         this.width = width;
         this.height = height;
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, height, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, data);
+        gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, width, height, 0, format, gl.UNSIGNED_BYTE, data);
     } else {
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, gl.LUMINANCE, gl.UNSIGNED_BYTE, data);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, format, gl.UNSIGNED_BYTE, data);
     }
 };
 
@@ -90,9 +96,9 @@ WebGLPlayer.prototype.initGL = function (options) {
         " 0, 0, 0, 1",
         ");",
         "void main(void) {",
-        " float y = texture2D(YTexture, vTextureCoord * uScaleY).x;",
-        " float u = texture2D(UTexture, vTextureCoord * uScaleUV).x;",
-        " float v = texture2D(VTexture, vTextureCoord * uScaleUV).x;",
+        " float y = texture2D(YTexture, vTextureCoord * uScaleY).r;",
+        " float u = texture2D(UTexture, vTextureCoord * uScaleUV).r;",
+        " float v = texture2D(VTexture, vTextureCoord * uScaleUV).r;",
         " gl_FragColor = vec4(y, u, v, 1.0) * YUV2RGB;",
         "}"
     ].join("\n");
@@ -126,9 +132,9 @@ WebGLPlayer.prototype.initGL = function (options) {
     if (this.uScaleYLocation) gl.uniform2f(this.uScaleYLocation, 1.0, 1.0);
     if (this.uScaleUVLocation) gl.uniform2f(this.uScaleUVLocation, 1.0, 1.0);
 
-    gl.y = new Texture(gl);
-    gl.u = new Texture(gl);
-    gl.v = new Texture(gl);
+    gl.y = new Texture(gl, this.isWebGL2);
+    gl.u = new Texture(gl, this.isWebGL2);
+    gl.v = new Texture(gl, this.isWebGL2);
     gl.y.bind(0, program, "YTexture");
     gl.u.bind(1, program, "UTexture");
     gl.v.bind(2, program, "VTexture");

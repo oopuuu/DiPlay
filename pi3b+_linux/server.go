@@ -135,9 +135,14 @@ type WsClient struct {
 }
 
 func newWsClient(conn net.Conn) *WsClient {
+	if tc, ok := conn.(*net.TCPConn); ok {
+		_ = tc.SetNoDelay(true)
+		_ = tc.SetWriteBuffer(1024 * 1024)
+		_ = tc.SetReadBuffer(256 * 1024)
+	}
 	c := &WsClient{
 		conn:       conn,
-		sendQueue:  make(chan []byte, 32),
+		sendQueue:  make(chan []byte, 64),
 		remoteAddr: conn.RemoteAddr().String(),
 	}
 	go c.writePump()
@@ -310,8 +315,8 @@ func (c *ControlClient) SendBytes(data []byte) error {
 var hub = &Hub{
 	wsClients:    make(map[*WsClient]bool),
 	audioClients: make(map[*WsClient]bool),
-	width:        1920,
-	height:       1080,
+	width:        1280,
+	height:       720,
 	frameChan:    make(chan []byte, 120),
 	audioChan:    make(chan []byte, 256),
 	hasSession:   true,
