@@ -129,8 +129,10 @@ WebGLPlayer.prototype.renderFrame = function (videoFrame, width, height, uOffset
     }
 
     var gl = this.gl;
-    if (gl.canvas.width !== width || gl.canvas.height !== height) {
-        gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    if (this.vpW !== width || this.vpH !== height) {
+        this.vpW = width;
+        this.vpH = height;
+        gl.viewport(0, 0, width, height);
     }
 
     gl.y.fill(width, height, videoFrame.subarray(0, uOffset));
@@ -143,8 +145,10 @@ WebGLPlayer.prototype.renderFrame = function (videoFrame, width, height, uOffset
 WebGLPlayer.prototype.renderDirectYUV = function (u8Heap, addr_y, addr_u, addr_v, width, height, stride_y, stride_u, stride_v) {
     if (!this.gl) return;
     var gl = this.gl;
-    if (gl.canvas.width !== width || gl.canvas.height !== height) {
-        gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    if (this.vpW !== width || this.vpH !== height) {
+        this.vpW = width;
+        this.vpH = height;
+        gl.viewport(0, 0, width, height);
     }
     var yLen = width * height;
     var uvWidth = width >> 1;
