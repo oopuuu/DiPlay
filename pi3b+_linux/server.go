@@ -128,33 +128,65 @@ type WifiModePayload struct {
 
 // Thread-safe WebSocket Client wrapper with per-connection write mutex
 type WsClient struct {
-	conn        net.Conn
-	writeMu     sync.Mutex
-	timeoutErrs int
-	remoteAddr  string
+	conn       net.Conn
+	sendQueue  chan []byte
+	closed     int32
+	remoteAddr string
 }
 
 func newWsClient(conn net.Conn) *WsClient {
-	return &WsClient{
+	c := &WsClient{
 		conn:       conn,
+		sendQueue:  make(chan []byte, 32),
 		remoteAddr: conn.RemoteAddr().String(),
 	}
+	go c.writePump()
+	return c
 }
 
 func (c *WsClient) Close() error {
-	return c.conn.Close()
+	if atomic.CompareAndSwapInt32(&c.closed, 0, 1) {
+		close(c.sendQueue)
+		return c.conn.Close()
+	}
+	return nil
+}
+
+func (c *WsClient) writePump() {
+	defer c.conn.Close()
+	for msg := range c.sendQueue {
+		_ = c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if _, err := c.conn.Write(msg); err != nil {
+			atomic.StoreInt32(&c.closed, 1)
+			return
+		}
+	}
 }
 
 func (c *WsClient) SendFrame(opcode byte, payload []byte) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return sendWsFrame(c.conn, opcode, payload)
+	if atomic.LoadInt32(&c.closed) != 0 {
+		return net.ErrClosed
+	}
+	frame := buildWsFrame(opcode, payload)
+	select {
+	case c.sendQueue <- frame:
+		return nil
+	default:
+		return nil
+	}
 }
 
 func (c *WsClient) SendMultiplex(channel byte, flag byte, data []byte) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return sendMultiplexBinary(c.conn, channel, flag, data)
+	if atomic.LoadInt32(&c.closed) != 0 {
+		return net.ErrClosed
+	}
+	frame := buildMultiplexFrame(channel, flag, data)
+	select {
+	case c.sendQueue <- frame:
+		return nil
+	default:
+		return nil
+	}
 }
 
 // Global streaming hub
@@ -2037,23 +2069,32 @@ func (h *Hub) runBroadcaster() {
 
 			atomic.AddInt64(&h.fpsCounter, 1)
 
+			packet := buildMultiplexFrame(0x02, flag, frame)
+
 			for _, c := range clients {
-				if err := c.SendMultiplex(0x02, flag, frame); err != nil {
-					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-						atomic.AddInt64(&h.droppedFrames, 1)
-						c.timeoutErrs++
-						if c.timeoutErrs < 10 {
-							// Wi-Fi dynamic bitrate congestion: skip frame without dropping socket
-							continue
-						}
-					}
+				if atomic.LoadInt32(&c.closed) != 0 {
 					h.mu.Lock()
 					delete(h.wsClients, c)
 					h.mu.Unlock()
-					c.Close()
-					log.Printf("[WS] Client %s removed due to write failure: %v", c.remoteAddr, err)
-				} else {
-					c.timeoutErrs = 0
+					continue
+				}
+				select {
+				case c.sendQueue <- packet:
+				default:
+					atomic.AddInt64(&h.droppedFrames, 1)
+					if isKey {
+						// Priority queueing for keyframe: drop older delta frames so client receives fresh keyframe immediately!
+						for len(c.sendQueue) > 0 {
+							select {
+							case <-c.sendQueue:
+							default:
+							}
+						}
+						select {
+						case c.sendQueue <- packet:
+						default:
+						}
+					}
 				}
 			}
 
@@ -2066,72 +2107,76 @@ func (h *Hub) runBroadcaster() {
 			h.mu.RUnlock()
 
 			// Channel 0x00: 44.1kHz Stereo PCM (flag=0x00)
+			audioPacket := buildMultiplexFrame(0x00, 0x00, pcm)
 			for _, c := range audioClients {
-				if err := c.SendMultiplex(0x00, 0x00, pcm); err != nil {
+				if atomic.LoadInt32(&c.closed) != 0 {
 					h.mu.Lock()
 					delete(h.audioClients, c)
 					h.mu.Unlock()
-					c.Close()
+					continue
+				}
+				select {
+				case c.sendQueue <- audioPacket:
+				default:
 				}
 			}
 		}
 	}
 }
 
-// WebSocket RFC 6455 Frame helpers with zero-Nagle atomic writev
-func sendWsFrame(conn net.Conn, opcode byte, payload []byte) error {
+// WebSocket RFC 6455 Frame builders with atomic pre-allocation (avoids partial writes & corrupt frames)
+func buildWsFrame(opcode byte, payload []byte) []byte {
 	length := len(payload)
-	header := make([]byte, 10)
-	header[0] = 0x80 | (opcode & 0x0F) // FIN + opcode
-
 	hLen := 2
 	if length <= 125 {
-		header[1] = byte(length)
+		hLen = 2
 	} else if length <= 65535 {
-		header[1] = 126
-		binary.BigEndian.PutUint16(header[2:4], uint16(length))
 		hLen = 4
 	} else {
-		header[1] = 127
-		binary.BigEndian.PutUint64(header[2:10], uint64(length))
 		hLen = 10
 	}
-
-	bufs := net.Buffers{header[:hLen], payload}
-	_ = conn.SetWriteDeadline(time.Now().Add(120 * time.Millisecond))
-	_, err := bufs.WriteTo(conn)
-	return err
+	frame := make([]byte, hLen+length)
+	frame[0] = 0x80 | (opcode & 0x0F) // FIN + opcode
+	if length <= 125 {
+		frame[1] = byte(length)
+	} else if length <= 65535 {
+		frame[1] = 126
+		binary.BigEndian.PutUint16(frame[2:4], uint16(length))
+	} else {
+		frame[1] = 127
+		binary.BigEndian.PutUint64(frame[2:10], uint64(length))
+	}
+	copy(frame[hLen:], payload)
+	return frame
 }
 
-func sendMultiplexBinary(conn net.Conn, channel byte, flag byte, data []byte) error {
+func buildMultiplexFrame(channel byte, flag byte, data []byte) []byte {
 	totalLen := len(data) + 4
-	header := make([]byte, 14)
-	header[0] = 0x82 // Binary frame (FIN + opcode 2)
-
 	hLen := 2
 	if totalLen <= 125 {
-		header[1] = byte(totalLen)
+		hLen = 2
 	} else if totalLen <= 65535 {
-		header[1] = 126
-		binary.BigEndian.PutUint16(header[2:4], uint16(totalLen))
 		hLen = 4
 	} else {
-		header[1] = 127
-		binary.BigEndian.PutUint64(header[2:10], uint64(totalLen))
 		hLen = 10
 	}
-
-	header[hLen] = channel
-	header[hLen+1] = flag
-	header[hLen+2] = 0
-	header[hLen+3] = 0
-	hLen += 4
-
-	// Atomic write using net.Buffers with 120ms deadline (prevents HOL blocking at 60 FPS).
-	bufs := net.Buffers{header[:hLen], data}
-	_ = conn.SetWriteDeadline(time.Now().Add(120 * time.Millisecond))
-	_, err := bufs.WriteTo(conn)
-	return err
+	frame := make([]byte, hLen+4+len(data))
+	frame[0] = 0x82 // Binary frame (FIN + opcode 2)
+	if totalLen <= 125 {
+		frame[1] = byte(totalLen)
+	} else if totalLen <= 65535 {
+		frame[1] = 126
+		binary.BigEndian.PutUint16(frame[2:4], uint16(totalLen))
+	} else {
+		frame[1] = 127
+		binary.BigEndian.PutUint64(frame[2:10], uint64(totalLen))
+	}
+	frame[hLen] = channel
+	frame[hLen+1] = flag
+	frame[hLen+2] = 0
+	frame[hLen+3] = 0
+	copy(frame[hLen+4:], data)
+	return frame
 }
 
 func readWsFrame(r io.Reader, buf []byte) (byte, []byte, error) {

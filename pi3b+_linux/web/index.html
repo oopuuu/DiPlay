@@ -2813,50 +2813,54 @@
       if (!wasmCallbackPtr) {
         wasmCallbackPtr = Module.addFunction(function (addr_y, addr_u, addr_v, stride_y, stride_u, stride_v, width, height, pts) {
           lastWebCodecsFrameTime = performance.now(); // Keep watchdog alive!
-          if (wasmCanvas.width !== width || wasmCanvas.height !== height) {
-            wasmCanvas.width = width;
-            wasmCanvas.height = height;
-            currentWidth = width;
-            currentHeight = height;
-            if (typeof updateResolutionDisplay === 'function') updateResolutionDisplay();
-          }
-
-          if (wasmPlayer) {
-            if (typeof wasmPlayer.renderDirectYUV === 'function') {
-              wasmPlayer.renderDirectYUV(Module.HEAPU8, addr_y, addr_u, addr_v, width, height, stride_y, stride_u, stride_v);
-            } else {
-              const size = width * height + (width / 2) * (height / 2) * 2;
-              if (!cachedWasmFrameData || cachedWasmFrameSize !== size) {
-                cachedWasmFrameData = new Uint8Array(size);
-                cachedWasmFrameSize = size;
-              }
-              const frameData = cachedWasmFrameData;
-              const yLength = width * height;
-              const uvLength = (width >> 1) * (height >> 1);
-              if (stride_y === width && stride_u === (width >> 1) && stride_v === (width >> 1)) {
-                frameData.set(Module.HEAPU8.subarray(addr_y, addr_y + yLength), 0);
-                frameData.set(Module.HEAPU8.subarray(addr_u, addr_u + uvLength), yLength);
-                frameData.set(Module.HEAPU8.subarray(addr_v, addr_v + uvLength), yLength + uvLength);
-              }
-              wasmPlayer.renderFrame(frameData, width, height, yLength, uvLength);
+          try {
+            if (wasmCanvas.width !== width || wasmCanvas.height !== height) {
+              wasmCanvas.width = width;
+              wasmCanvas.height = height;
+              currentWidth = width;
+              currentHeight = height;
+              if (typeof updateResolutionDisplay === 'function') updateResolutionDisplay();
             }
-          }
 
-          if (!hasReceivedVideoFrame) {
-            hasReceivedVideoFrame = true;
-            if (screen) screen.style.display = 'none';
-            emptyOverlay.classList.add('hidden');
-            updateStatusBadge();
-            sendRemoteLog('[WASM-WebGL] 行车防黑屏视频已点亮 (100% 独立 WebGL 画布渲染)！');
-          }
+            if (wasmPlayer) {
+              if (typeof wasmPlayer.renderDirectYUV === 'function') {
+                wasmPlayer.renderDirectYUV(Module.HEAPU8, addr_y, addr_u, addr_v, width, height, stride_y, stride_u, stride_v);
+              } else {
+                const size = width * height + (width / 2) * (height / 2) * 2;
+                if (!cachedWasmFrameData || cachedWasmFrameSize !== size) {
+                  cachedWasmFrameData = new Uint8Array(size);
+                  cachedWasmFrameSize = size;
+                }
+                const frameData = cachedWasmFrameData;
+                const yLength = width * height;
+                const uvLength = (width >> 1) * (height >> 1);
+                if (stride_y === width && stride_u === (width >> 1) && stride_v === (width >> 1)) {
+                  frameData.set(Module.HEAPU8.subarray(addr_y, addr_y + yLength), 0);
+                  frameData.set(Module.HEAPU8.subarray(addr_u, addr_u + uvLength), yLength);
+                  frameData.set(Module.HEAPU8.subarray(addr_v, addr_v + uvLength), yLength + uvLength);
+                }
+                wasmPlayer.renderFrame(frameData, width, height, yLength, uvLength);
+              }
+            }
 
-          videoFrameCounter++;
-          const now = performance.now();
-          if (now - videoFpsInterval >= 1000) {
-            currentVideoFps = Math.round((videoFrameCounter * 1000) / (now - videoFpsInterval));
-            videoFrameCounter = 0;
-            videoFpsInterval = now;
-            updateFpsDisplay(currentVideoFps, 'WebGL独立软解');
+            if (!hasReceivedVideoFrame) {
+              hasReceivedVideoFrame = true;
+              if (screen) screen.style.display = 'none';
+              emptyOverlay.classList.add('hidden');
+              updateStatusBadge();
+              sendRemoteLog('[WASM-WebGL] 行车防黑屏视频已点亮 (100% 独立 WebGL 画布渲染)！');
+            }
+
+            videoFrameCounter++;
+            const now = performance.now();
+            if (now - videoFpsInterval >= 1000) {
+              currentVideoFps = Math.round((videoFrameCounter * 1000) / (now - videoFpsInterval));
+              videoFrameCounter = 0;
+              videoFpsInterval = now;
+              updateFpsDisplay(currentVideoFps, 'WebGL独立软解');
+            }
+          } catch (err) {
+            console.error('[WASM-WebGL] Render error in callback:', err);
           }
         }, 'viiiiiiiii');
       }
@@ -2908,15 +2912,6 @@
           }
         }
         return; // Drop delta frames while awaiting IDR keyframe
-      }
-      if (cachedAnnexBConfig) {
-        try {
-          const cfg = new Uint8Array(cachedAnnexBConfig);
-          const p = Module._malloc(cfg.length);
-          Module.HEAPU8.set(cfg, p);
-          Module._decodeData(p, cfg.length, wasmPts++);
-          Module._free(p);
-        } catch (_) {}
       }
       wasmKeyframeFed = true;
       sendRemoteLog('[WASM-WebGL] 关键帧 (IDR) 已到达，开始 WebGL 解码渲染！');
@@ -3401,7 +3396,7 @@
     }
 
     // 2. MSE 管线重置：清空旧 SourceBuffer 与 DOM 关联，然后重新初始化
-    if (!hasWebCodecs) {
+    if (!hasWebCodecs && currentStreamMode === 'video_mse') {
       if (jmuxerPlayer) {
         try {
           jmuxerPlayer.destroy();
