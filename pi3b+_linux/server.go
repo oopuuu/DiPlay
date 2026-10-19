@@ -2034,6 +2034,21 @@ func handleAudioWs(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[AudioWS] Audio client disconnected (%s)", client.remoteAddr)
 }
 
+var lastKeyframeReqNano int64
+
+func triggerKeyframeRequestThrottled() {
+	now := time.Now().UnixNano()
+	last := atomic.LoadInt64(&lastKeyframeReqNano)
+	if now-last < 300*1000*1000 { // Max once per 300ms
+		return
+	}
+	if atomic.CompareAndSwapInt64(&lastKeyframeReqNano, last, now) {
+		if ctrlBridge != nil {
+			go ctrlBridge.Send(`{"type":"keyframe"}`)
+		}
+	}
+}
+
 // Broadcaster routine: fan-out video & audio to clients
 func (h *Hub) runBroadcaster() {
 	for {
@@ -2099,6 +2114,9 @@ func (h *Hub) runBroadcaster() {
 						case c.sendQueue <- packet:
 						default:
 						}
+					} else {
+						// Proactively request an IDR keyframe if dropping P-frames, so decode chain self-heals in <100ms
+						triggerKeyframeRequestThrottled()
 					}
 				}
 			}
