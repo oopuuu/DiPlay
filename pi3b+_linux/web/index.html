@@ -3072,7 +3072,8 @@
   let cachedDescription = null;
   let lastKeyframeRequestTime = 0;
   let lastVideoTimestamp = 0;
-  let lastWebCodecsFrameTime = 0;
+  let lastWebCodecsFrameTime = performance.now();
+  let watchdogCooldownUntil = 0;
   let lastQueueWarnTime = 0;
 
   function sendRemoteLog(msg) {
@@ -3368,6 +3369,9 @@
     hasReceivedKeyframe = false;
     mseKeyframeFed = false;
     wasmKeyframeFed = false;
+    lastWebCodecsFrameTime = performance.now();
+    watchdogCooldownUntil = performance.now() + 4500;
+    stallDetectionCount = 0;
     if (typeof Module !== 'undefined' && Module._flushDecoder && wasmDecoderOpen) {
       try { Module._flushDecoder(); } catch (_) {}
     }
@@ -6581,20 +6585,28 @@
       // Hardware WebCodecs or Canvas Mirror mode: Video tag is NOT used!
       // Check if frames are arriving over WebSocket but NOT being decoded/rendered to Canvas
       if (isStreaming && framesReceived > lastWatchdogFrameCount + 15) {
-        const timeSinceLastRender = performance.now() - lastWebCodecsFrameTime;
-        if (lastWebCodecsFrameTime > 0 && timeSinceLastRender > 2500) {
+        const now = performance.now();
+        if (now < watchdogCooldownUntil) {
+          stallDetectionCount = 0;
+          lastWatchdogFrameCount = framesReceived;
+          return;
+        }
+        const timeSinceLastRender = now - lastWebCodecsFrameTime;
+        if (lastWebCodecsFrameTime > 0 && timeSinceLastRender > 3500) {
           stallDetectionCount++;
-          if (stallDetectionCount >= 2) {
+          if (stallDetectionCount >= 3) {
             if (typeof sendRemoteLog === 'function') {
-              sendRemoteLog('[Watchdog] ⚠️ 检测到硬件解码渲染停滞 (' + Math.round(timeSinceLastRender) + 'ms 无新帧输出)，正在重置解码器并索要关键帧...');
+              sendRemoteLog('[Watchdog] ⚠️ 检测到硬件解码渲染停滞 (' + Math.round(timeSinceLastRender) + 'ms 无新帧输出)，正在自愈并索要关键帧...');
             }
+            lastWebCodecsFrameTime = now;
+            watchdogCooldownUntil = now + 4500;
+            stallDetectionCount = 0;
             if (typeof resetVideoPipeline === 'function') {
               resetVideoPipeline('watchdog_stall');
             }
             if (ws && wsConnected && ws.readyState === WebSocket.OPEN) {
               try { ws.send(JSON.stringify({ type: 'requestKeyFrame' })); } catch (_) {}
             }
-            stallDetectionCount = 0;
           }
         } else {
           stallDetectionCount = 0;

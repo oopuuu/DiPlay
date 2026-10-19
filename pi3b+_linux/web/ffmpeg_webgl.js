@@ -47,7 +47,9 @@ function WebGLPlayer(canvas, options) {
             glOpts[k] = options[k];
         }
     }
-    this.gl = canvas.getContext("webgl", glOpts) || canvas.getContext("experimental-webgl", glOpts);
+    // Prefer WebGL 2.0 for UNPACK_ROW_LENGTH zero-copy strided DMA texture upload (60 FPS)
+    this.gl = canvas.getContext("webgl2", glOpts) || canvas.getContext("webgl", glOpts) || canvas.getContext("experimental-webgl", glOpts);
+    this.isWebGL2 = (typeof WebGL2RenderingContext !== "undefined" && this.gl instanceof WebGL2RenderingContext);
     this.initGL(options);
 }
 
@@ -155,13 +157,22 @@ WebGLPlayer.prototype.renderDirectYUV = function (u8Heap, addr_y, addr_u, addr_v
     var uvHeight = height >> 1;
     var uvLen = uvWidth * uvHeight;
 
-    if (stride_y === width && stride_u === uvWidth && stride_v === uvWidth) {
-        // 100% Zero-copy direct DMA upload from Emscripten WASM Heap via texSubImage2D!
+    if (this.isWebGL2) {
+        // WebGL 2.0 Native Hardware DMA: ZERO CPU JavaScript memory copies, GPU driver handles strided upload directly!
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, stride_y);
+        gl.y.fill(width, height, u8Heap.subarray(addr_y, addr_y + stride_y * height));
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, stride_u);
+        gl.u.fill(uvWidth, uvHeight, u8Heap.subarray(addr_u, addr_u + stride_u * uvHeight));
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, stride_v);
+        gl.v.fill(uvWidth, uvHeight, u8Heap.subarray(addr_v, addr_v + stride_v * uvHeight));
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0); // Restore default
+    } else if (stride_y === width && stride_u === uvWidth && stride_v === uvWidth) {
+        // WebGL 1.0 zero-copy direct contiguous upload
         gl.y.fill(width, height, u8Heap.subarray(addr_y, addr_y + yLen));
         gl.u.fill(uvWidth, uvHeight, u8Heap.subarray(addr_u, addr_u + uvLen));
         gl.v.fill(uvWidth, uvHeight, u8Heap.subarray(addr_v, addr_v + uvLen));
     } else {
-        // Fallback for padded strides
+        // Fallback for WebGL 1.0 with padded strides
         if (!this.bufY || this.bufY.length !== yLen) {
             this.bufY = new Uint8Array(yLen);
             this.bufU = new Uint8Array(uvLen);
